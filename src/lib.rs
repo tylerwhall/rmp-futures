@@ -16,6 +16,7 @@ pub enum ValueFuture<R> {
     Boolean(bool, R),
     Integer(Integer, R),
     Array(ArrayFuture<R>),
+    Map(MapFuture<R>),
 }
 
 impl<R> ValueFuture<R> {
@@ -30,6 +31,14 @@ impl<R> ValueFuture<R> {
     pub fn as_array(self) -> Option<ArrayFuture<R>> {
         if let ValueFuture::Array(array) = self {
             Some(array)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_map(self) -> Option<MapFuture<R>> {
+        if let ValueFuture::Map(map) = self {
+            Some(map)
         } else {
             None
         }
@@ -145,6 +154,10 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
                 reader: self.reader,
                 len: len.into(),
             }),
+            Marker::FixMap(len) => ValueFuture::Map(MapFuture {
+                reader: self.reader,
+                len: len.into(),
+            }),
             _ => panic!("Unhandled type {:?}", marker),
         })
     }
@@ -177,17 +190,80 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
     }
 }
 
+#[derive(Debug)]
+pub struct MapFuture<R> {
+    reader: R,
+    len: usize,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for MapFuture<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
+        R::poll_read(Pin::new(&mut self.as_mut().reader), cx, buf)
+    }
+}
+
+impl<R: AsyncRead + Unpin> MapFuture<R> {
+    pub fn next_key(mut self) -> MsgPackOption<MsgPackFuture<MapValueFuture<R>>, R> {
+        if self.len > 0 {
+            self.len -= 1;
+            MsgPackOption::Some(MsgPackFuture::new(MapValueFuture { reader: self }))
+        } else {
+            MsgPackOption::End(self.reader)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MapValueFuture<R> {
+    reader: MapFuture<R>,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for MapValueFuture<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
+        MapFuture::poll_read(Pin::new(&mut self.as_mut().reader), cx, buf)
+    }
+}
+
+impl<R: AsyncRead + Unpin> MapValueFuture<R> {
+    pub fn next_value(self) -> MsgPackFuture<MapFuture<R>> {
+        MsgPackFuture::new(self.reader)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::io::Cursor;
     use rmpv::Value;
+    use std::io::Cursor;
 
     fn value_to_vec(val: &Value) -> Cursor<Vec<u8>> {
         let mut buf = Cursor::new(Vec::new());
         rmpv::encode::write_value(&mut buf, &val).unwrap();
         buf.set_position(0);
         buf
+    }
+
+    #[test]
+    fn bool() {
+        async fn bool_test(buf: Cursor<Vec<u8>>) -> IoResult<bool> {
+            let msg = MsgPackFuture::new(buf);
+            let (val, _r) = msg.decode().await?.as_bool().unwrap();
+            Ok(val)
+        }
+
+        let val = value_to_vec(&true.into());
+        let val = futures::executor::LocalPool::new()
+            .run_until(bool_test(val))
+            .unwrap();
+        assert_eq!(val, true);
     }
 
     #[test]
@@ -215,17 +291,31 @@ mod test {
     }
 
     #[test]
-    fn bool() {
-        async fn bool_test(buf: Cursor<Vec<u8>>) -> IoResult<bool> {
+    fn map() {
+        async fn map_test(buf: Cursor<Vec<u8>>) -> IoResult<Vec<(u64, u64)>> {
             let msg = MsgPackFuture::new(buf);
-            let val = msg.decode().await?.as_bool().unwrap();
-            Ok(val)
-        }
 
-        let val = value_to_vec(&true.into());
+            let mut vec = Vec::new();
+            let mut map = msg.decode().await?.as_map().unwrap();
+
+            while let MsgPackOption::Some(elem) = map.next_key() {
+                let (key, r) = elem.decode().await?.as_u64().unwrap();
+                let (val, m) = r.next_value().decode().await?.as_u64().unwrap();
+                vec.push((key, val));
+                map = m;
+            }
+
+            Ok(vec)
+        }
+        let val = Value::from(vec![
+            (Value::from(1), Value::from(2)),
+            (Value::from(3), Value::from(4)),
+        ]);
+        let val = value_to_vec(&val);
         let val = futures::executor::LocalPool::new()
-            .run_until(bool_test(val))
+            .run_until(map_test(val))
             .unwrap();
-        assert_eq!(val, true);
+        assert_eq!(val, vec![(1, 2), (3, 4)]);
     }
+
 }
