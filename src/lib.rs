@@ -13,15 +13,15 @@ use futures::prelude::*;
 #[derive(Debug)]
 pub enum ValueFuture<R> {
     Nil,
-    Boolean(bool),
+    Boolean(bool, R),
     Integer(Integer, R),
     Array(ArrayFuture<R>),
 }
 
 impl<R> ValueFuture<R> {
-    pub fn as_bool(self) -> Option<bool> {
-        if let ValueFuture::Boolean(val) = self {
-            Some(val)
+    pub fn as_bool(self) -> Option<(bool, R)> {
+        if let ValueFuture::Boolean(val, r) = self {
+            Some((val, r))
         } else {
             None
         }
@@ -131,8 +131,8 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
             Marker::FixPos(val) => ValueFuture::Integer(Integer::from(val), self.reader),
             Marker::FixNeg(val) => ValueFuture::Integer(Integer::from(val), self.reader),
             Marker::Null => ValueFuture::Nil,
-            Marker::True => ValueFuture::Boolean(true),
-            Marker::False => ValueFuture::Boolean(false),
+            Marker::True => ValueFuture::Boolean(true, self.reader),
+            Marker::False => ValueFuture::Boolean(false, self.reader),
             Marker::U8 => ValueFuture::Integer(Integer::from(self.read_u8().await?), self.reader),
             Marker::U16 => ValueFuture::Integer(Integer::from(self.read_u16().await?), self.reader),
             Marker::U32 => ValueFuture::Integer(Integer::from(self.read_u32().await?), self.reader),
