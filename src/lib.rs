@@ -7,6 +7,7 @@ use rmp::Marker;
 use rmpv::Integer;
 
 use byteorder::{BigEndian, ByteOrder};
+use futures::io::ErrorKind;
 use futures::io::Result as IoResult;
 use futures::prelude::*;
 
@@ -17,10 +18,12 @@ pub enum ValueFuture<R> {
     Integer(Integer, R),
     Array(ArrayFuture<R>),
     Map(MapFuture<R>),
+    Bin(BinFuture<R>),
+    String(StringFuture<R>),
 }
 
 impl<R> ValueFuture<R> {
-    pub fn as_bool(self) -> Option<(bool, R)> {
+    pub fn into_bool(self) -> Option<(bool, R)> {
         if let ValueFuture::Boolean(val, r) = self {
             Some((val, r))
         } else {
@@ -28,7 +31,23 @@ impl<R> ValueFuture<R> {
         }
     }
 
-    pub fn as_array(self) -> Option<ArrayFuture<R>> {
+    pub fn into_bin(self) -> Option<BinFuture<R>> {
+        if let ValueFuture::Bin(bin) = self {
+            Some(bin)
+        } else {
+            None
+        }
+    }
+
+    pub fn into_string(self) -> Option<StringFuture<R>> {
+        if let ValueFuture::String(s) = self {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    pub fn into_array(self) -> Option<ArrayFuture<R>> {
         if let ValueFuture::Array(array) = self {
             Some(array)
         } else {
@@ -36,7 +55,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
-    pub fn as_map(self) -> Option<MapFuture<R>> {
+    pub fn into_map(self) -> Option<MapFuture<R>> {
         if let ValueFuture::Map(map) = self {
             Some(map)
         } else {
@@ -44,7 +63,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
-    pub fn as_u64(self) -> Option<(u64, R)> {
+    pub fn into_u64(self) -> Option<(u64, R)> {
         if let ValueFuture::Integer(val, r) = self {
             val.as_u64().map(|val| (val, r))
         } else {
@@ -150,14 +169,88 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
             Marker::I16 => ValueFuture::Integer(Integer::from(self.read_i16().await?), self.reader),
             Marker::I32 => ValueFuture::Integer(Integer::from(self.read_i32().await?), self.reader),
             Marker::I64 => ValueFuture::Integer(Integer::from(self.read_i64().await?), self.reader),
+            Marker::FixStr(len) => ValueFuture::String(StringFuture(BinFuture {
+                reader: self.reader,
+                len: len.into(),
+            })),
+            Marker::Str8 => {
+                let len = self.read_u8().await?;
+                ValueFuture::String(StringFuture(BinFuture {
+                    reader: self.reader,
+                    len: len.into(),
+                }))
+            }
+            Marker::Str16 => {
+                let len = self.read_u16().await?;
+                ValueFuture::String(StringFuture(BinFuture {
+                    reader: self.reader,
+                    len: len.into(),
+                }))
+            }
+            Marker::Str32 => {
+                let len = self.read_u32().await?;
+                ValueFuture::String(StringFuture(BinFuture {
+                    reader: self.reader,
+                    len: len as usize,
+                }))
+            }
+            Marker::Bin8 => {
+                let len = self.read_u8().await?;
+                ValueFuture::Bin(BinFuture {
+                    reader: self.reader,
+                    len: len.into(),
+                })
+            }
+            Marker::Bin16 => {
+                let len = self.read_u16().await?.into();
+                ValueFuture::Bin(BinFuture {
+                    reader: self.reader,
+                    len,
+                })
+            }
+            Marker::Bin32 => {
+                let len = self.read_u32().await? as usize;
+                ValueFuture::Bin(BinFuture {
+                    reader: self.reader,
+                    len,
+                })
+            }
             Marker::FixArray(len) => ValueFuture::Array(ArrayFuture {
                 reader: self.reader,
                 len: len.into(),
             }),
+            Marker::Array16 => {
+                let len = self.read_u16().await?;
+                ValueFuture::Array(ArrayFuture {
+                    reader: self.reader,
+                    len: len.into(),
+                })
+            }
+            Marker::Array32 => {
+                let len = self.read_u32().await?;
+                ValueFuture::Array(ArrayFuture {
+                    reader: self.reader,
+                    len: len as usize,
+                })
+            }
             Marker::FixMap(len) => ValueFuture::Map(MapFuture {
                 reader: self.reader,
                 len: len.into(),
             }),
+            Marker::Map16 => {
+                let len = self.read_u16().await?;
+                ValueFuture::Map(MapFuture {
+                    reader: self.reader,
+                    len: len.into(),
+                })
+            }
+            Marker::Map32 => {
+                let len = self.read_u32().await?;
+                ValueFuture::Map(MapFuture {
+                    reader: self.reader,
+                    len: len as usize,
+                })
+            }
             _ => panic!("Unhandled type {:?}", marker),
         })
     }
@@ -238,6 +331,56 @@ impl<R: AsyncRead + Unpin> MapValueFuture<R> {
     }
 }
 
+#[derive(Debug)]
+pub struct BinFuture<R> {
+    reader: R,
+    len: usize,
+}
+
+impl<R: AsyncRead + Unpin> BinFuture<R> {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Panics if buf length is less than the value returned by `len()`
+    pub async fn read_all(mut self, buf: &mut [u8]) -> IoResult<R> {
+        self.reader
+            .read_exact(&mut buf[..self.len])
+            .await
+            .map(|_| self.reader)
+    }
+
+    pub fn into_inner(self) -> R {
+        assert_eq!(self.len, 0);
+        self.reader
+    }
+
+    pub async fn into_vec(mut self) -> IoResult<(Vec<u8>, R)> {
+        let mut vec = vec![0u8; self.len];
+        self.reader
+            .read_exact(&mut vec[..])
+            .await
+            .map(|_| (vec, self.reader))
+    }
+}
+
+#[derive(Debug)]
+pub struct StringFuture<R>(BinFuture<R>);
+
+impl<R: AsyncRead + Unpin> StringFuture<R> {
+    pub async fn into_string(self) -> IoResult<(String, R)> {
+        self.0.into_vec().await.and_then(|(v, r)| {
+            String::from_utf8(v)
+                .map_err(|_| ErrorKind::InvalidData.into())
+                .map(|s| (s, r))
+        })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -255,7 +398,7 @@ mod test {
     fn bool() {
         async fn bool_test(buf: Cursor<Vec<u8>>) -> IoResult<bool> {
             let msg = MsgPackFuture::new(buf);
-            let (val, _r) = msg.decode().await?.as_bool().unwrap();
+            let (val, _r) = msg.decode().await?.into_bool().unwrap();
             Ok(val)
         }
 
@@ -267,15 +410,51 @@ mod test {
     }
 
     #[test]
-    fn array() {
+    fn bin() {
+        async fn bin_test(buf: Cursor<Vec<u8>>) -> IoResult<Vec<u8>> {
+            let msg = MsgPackFuture::new(buf);
+            let (val, _r) = msg.decode().await?.into_bin().unwrap().into_vec().await?;
+            Ok(val)
+        }
+
+        let val = value_to_vec(&vec![1u8, 2, 3, 4].into());
+        let val = futures::executor::LocalPool::new()
+            .run_until(bin_test(val))
+            .unwrap();
+        assert_eq!(val, vec![1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    fn string() {
+        async fn string_test(buf: Cursor<Vec<u8>>) -> IoResult<String> {
+            let msg = MsgPackFuture::new(buf);
+            let (val, _r) = msg
+                .decode()
+                .await?
+                .into_string()
+                .unwrap()
+                .into_string()
+                .await?;
+            Ok(val)
+        }
+
+        let val = value_to_vec(&"Hello world".into());
+        let val = futures::executor::LocalPool::new()
+            .run_until(string_test(val))
+            .unwrap();
+        assert_eq!(val, "Hello world");
+    }
+
+    #[test]
+    fn array_int() {
         async fn array_test(buf: Cursor<Vec<u8>>) -> IoResult<Vec<u64>> {
             let msg = MsgPackFuture::new(buf);
 
             let mut vec = Vec::new();
-            let mut array = msg.decode().await?.as_array().unwrap();
+            let mut array = msg.decode().await?.into_array().unwrap();
 
             while let MsgPackOption::Some(elem) = array.next() {
-                let (elem, a) = elem.decode().await?.as_u64().unwrap();
+                let (elem, a) = elem.decode().await?.into_u64().unwrap();
                 vec.push(elem);
                 array = a;
             }
@@ -291,16 +470,16 @@ mod test {
     }
 
     #[test]
-    fn map() {
+    fn map_int() {
         async fn map_test(buf: Cursor<Vec<u8>>) -> IoResult<Vec<(u64, u64)>> {
             let msg = MsgPackFuture::new(buf);
 
             let mut vec = Vec::new();
-            let mut map = msg.decode().await?.as_map().unwrap();
+            let mut map = msg.decode().await?.into_map().unwrap();
 
             while let MsgPackOption::Some(elem) = map.next_key() {
-                let (key, r) = elem.decode().await?.as_u64().unwrap();
-                let (val, m) = r.next_value().decode().await?.as_u64().unwrap();
+                let (key, r) = elem.decode().await?.into_u64().unwrap();
+                let (val, m) = r.next_value().decode().await?.into_u64().unwrap();
                 vec.push((key, val));
                 map = m;
             }
