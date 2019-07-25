@@ -17,6 +17,8 @@ pub enum ValueFuture<R> {
     Nil,
     Boolean(bool, R),
     Integer(Integer, R),
+    F32(f32, R),
+    F64(f64, R),
     Array(ArrayFuture<R>),
     Map(MapFuture<R>),
     Bin(BinFuture<R>),
@@ -76,6 +78,22 @@ impl<R> ValueFuture<R> {
     pub fn into_u64(self) -> Option<(u64, R)> {
         if let ValueFuture::Integer(val, r) = self {
             val.as_u64().map(|val| (val, r))
+        } else {
+            None
+        }
+    }
+
+    pub fn into_f32(self) -> Option<(f32, R)> {
+        if let ValueFuture::F32(val, r) = self {
+            Some((val, r))
+        } else {
+            None
+        }
+    }
+
+    pub fn into_f64(self) -> Option<(f64, R)> {
+        if let ValueFuture::F64(val, r) = self {
+            Some((val, r))
         } else {
             None
         }
@@ -163,6 +181,14 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         Ok(BigEndian::read_i64(&self.read_8().await?))
     }
 
+    async fn read_f32(&mut self) -> IoResult<f32> {
+        Ok(BigEndian::read_f32(&self.read_4().await?))
+    }
+
+    async fn read_f64(&mut self) -> IoResult<f64> {
+        Ok(BigEndian::read_f64(&self.read_8().await?))
+    }
+
     pub async fn decode(mut self) -> IoResult<ValueFuture<R>> {
         let marker = Marker::from_u8(self.read_u8().await?);
         Ok(match marker {
@@ -179,6 +205,8 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
             Marker::I16 => ValueFuture::Integer(Integer::from(self.read_i16().await?), self.reader),
             Marker::I32 => ValueFuture::Integer(Integer::from(self.read_i32().await?), self.reader),
             Marker::I64 => ValueFuture::Integer(Integer::from(self.read_i64().await?), self.reader),
+            Marker::F32 => ValueFuture::F32(self.read_f32().await?, self.reader),
+            Marker::F64 => ValueFuture::F64(self.read_f64().await?, self.reader),
             Marker::FixStr(len) => ValueFuture::String(StringFuture(BinFuture {
                 reader: self.reader,
                 len: len.into(),
@@ -344,7 +372,6 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
                     ty,
                 })
             }
-            Marker::F32 | Marker::F64 => unimplemented!(),
             Marker::Reserved => return Err(ErrorKind::InvalidData.into()),
         })
     }
@@ -546,6 +573,38 @@ mod test {
             .run_until(bool_test(val))
             .unwrap();
         assert_eq!(val, true);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // Not doing math. Constant bytes are passed through unmodified.
+    fn f32() {
+        async fn f32_test(buf: Cursor<Vec<u8>>) -> IoResult<f32> {
+            let msg = MsgPackFuture::new(buf);
+            let (val, _r) = msg.decode().await?.into_f32().unwrap();
+            Ok(val)
+        }
+
+        let val = value_to_vec(&25.5f32.into());
+        let val = futures::executor::LocalPool::new()
+            .run_until(f32_test(val))
+            .unwrap();
+        assert_eq!(val, 25.5);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // Not doing math. Constant bytes are passed through unmodified.
+    fn f64() {
+        async fn f64_test(buf: Cursor<Vec<u8>>) -> IoResult<f64> {
+            let msg = MsgPackFuture::new(buf);
+            let (val, _r) = msg.decode().await?.into_f64().unwrap();
+            Ok(val)
+        }
+
+        let val = value_to_vec(&25.5f64.into());
+        let val = futures::executor::LocalPool::new()
+            .run_until(f64_test(val))
+            .unwrap();
+        assert_eq!(val, 25.5);
     }
 
     #[test]
