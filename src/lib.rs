@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use rmp::Marker;
-use rmpv::Integer;
+use rmpv::{Integer, Value};
 
 use byteorder::{BigEndian, ByteOrder};
 use futures::io::ErrorKind;
@@ -14,7 +14,7 @@ use futures::prelude::*;
 
 #[derive(Debug)]
 pub enum ValueFuture<R> {
-    Nil,
+    Nil(R),
     Boolean(bool, R),
     Integer(Integer, R),
     F32(f32, R),
@@ -112,7 +112,7 @@ pub struct MsgPackFuture<R> {
 }
 
 impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
-    fn new(reader: R) -> Self {
+    pub fn new(reader: R) -> Self {
         MsgPackFuture { reader }
     }
 
@@ -194,7 +194,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         Ok(match marker {
             Marker::FixPos(val) => ValueFuture::Integer(Integer::from(val), self.reader),
             Marker::FixNeg(val) => ValueFuture::Integer(Integer::from(val), self.reader),
-            Marker::Null => ValueFuture::Nil,
+            Marker::Null => ValueFuture::Nil(self.reader),
             Marker::True => ValueFuture::Boolean(true, self.reader),
             Marker::False => ValueFuture::Boolean(false, self.reader),
             Marker::U8 => ValueFuture::Integer(Integer::from(self.read_u8().await?), self.reader),
@@ -375,6 +375,26 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
             Marker::Reserved => return Err(ErrorKind::InvalidData.into()),
         })
     }
+
+    /// Read an entire message into a heap-allocated dynamic `Value`
+    pub async fn into_value(self) -> IoResult<(Value, R)>
+    where
+        R: 'static,
+    {
+        // Boxing the future is necessary for array and map which recurse.
+        Ok(match self.decode().await? {
+            ValueFuture::Nil(r) => (Value::Nil, r),
+            ValueFuture::Boolean(b, r) => (Value::Boolean(b), r),
+            ValueFuture::Integer(i, r) => (Value::Integer(i), r),
+            ValueFuture::F32(f, r) => (Value::F32(f), r),
+            ValueFuture::F64(f, r) => (Value::F64(f), r),
+            ValueFuture::Array(a) => a.into_value_dyn().boxed_local().await?,
+            ValueFuture::Map(m) => m.into_value_dyn().boxed_local().await?,
+            ValueFuture::Bin(m) => m.into_value().await?,
+            ValueFuture::String(s) => s.into_value().await?,
+            ValueFuture::Ext(e) => e.into_value().await?,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -394,6 +414,14 @@ impl<R: AsyncRead + Unpin> AsyncRead for ArrayFuture<R> {
 }
 
 impl<R: AsyncRead + Unpin> ArrayFuture<R> {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn next(mut self) -> MsgPackOption<MsgPackFuture<Self>, R> {
         if self.len > 0 {
             self.len -= 1;
@@ -401,6 +429,60 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
         } else {
             MsgPackOption::End(self.reader)
         }
+    }
+
+    pub async fn into_value(self) -> IoResult<(Value, R)>
+    where
+        R: 'static,
+    {
+        let mut a = self;
+        let mut v = Vec::with_capacity(a.len());
+        loop {
+            match a.next() {
+                MsgPackOption::Some(m) => {
+                    let (value, next) = m.into_value().await?;
+                    v.push(value);
+                    a = next;
+                }
+                MsgPackOption::End(r) => {
+                    break Ok((Value::Array(v), r));
+                }
+            }
+        }
+    }
+
+    /// Call into_value() after constructing a new ArrayFuture with the reader
+    /// converted to a boxed trait object
+    ///
+    /// This is needed to allow possible infinite recursion in an async function.
+    /// Since each level of nesting creates a new wrapper type containing the
+    /// length, it's not possible to evaluate all the possible levels of nesting
+    /// and pre-allocate the storage space, because it is infinite. Boxing the
+    /// reader on the heap at each array/map level provides for the dynamic
+    /// storage and makes the type of R (boxed trait) the same at each level of
+    /// nesting.
+    ///
+    /// Only necessary for the completely dynamic case where the decoder doesn't
+    /// know the structure of the message up front.
+    async fn into_value_dyn(self) -> IoResult<(Value, R)>
+    where
+        R: 'static,
+    {
+        let reader: Box<dyn AsyncRead + Unpin + 'static> = Box::new(self.reader);
+        let a = ArrayFuture {
+            reader,
+            len: self.len,
+        };
+        let (a, r) = a.into_value().await?;
+        // This is what Box::downcast() does. Could use something like the
+        // "mopa" crate. The unsafe risk is that the Boxed reader we get back
+        // from into_value() could be different than R, so `into_reader()` must
+        // uphold this.
+        let r = unsafe {
+            let raw: *mut dyn AsyncRead = Box::into_raw(r);
+            Box::from_raw(raw as *mut R)
+        };
+        Ok((a, *r))
     }
 }
 
@@ -421,6 +503,14 @@ impl<R: AsyncRead + Unpin> AsyncRead for MapFuture<R> {
 }
 
 impl<R: AsyncRead + Unpin> MapFuture<R> {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn next_key(mut self) -> MsgPackOption<MsgPackFuture<MapValueFuture<R>>, R> {
         if self.len > 0 {
             self.len -= 1;
@@ -428,6 +518,61 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
         } else {
             MsgPackOption::End(self.reader)
         }
+    }
+
+    pub async fn into_value(self) -> IoResult<(Value, R)>
+    where
+        R: 'static,
+    {
+        let mut map = self;
+        let mut v = Vec::with_capacity(map.len());
+        loop {
+            match map.next_key() {
+                MsgPackOption::Some(m) => {
+                    let (key, val) = m.into_value().await?;
+                    let (val, next) = val.next_value().into_value().await?;
+                    v.push((key, val));
+                    map = next;
+                }
+                MsgPackOption::End(r) => {
+                    break Ok((Value::Map(v), r));
+                }
+            }
+        }
+    }
+
+    /// Call into_value() after constructing a new ArrayFuture with the reader
+    /// converted to a boxed trait object
+    ///
+    /// This is needed to allow possible infinite recursion in an async function.
+    /// Since each level of nesting creates a new wrapper type containing the
+    /// length, it's not possible to evaluate all the possible levels of nesting
+    /// and pre-allocate the storage space, because it is infinite. Boxing the
+    /// reader on the heap at each array/map level provides for the dynamic
+    /// storage and makes the type of R (boxed trait) the same at each level of
+    /// nesting.
+    ///
+    /// Only necessary for the completely dynamic case where the decoder doesn't
+    /// know the structure of the message up front.
+    async fn into_value_dyn(self) -> IoResult<(Value, R)>
+    where
+        R: 'static,
+    {
+        let reader: Box<dyn AsyncRead + Unpin + 'static> = Box::new(self.reader);
+        let m = MapFuture {
+            reader,
+            len: self.len,
+        };
+        let (m, r) = m.into_value().await?;
+        // This is what Box::downcast() does. Could use something like the
+        // "mopa" crate. The unsafe risk is that the Boxed reader we get back
+        // from into_value() could be different than R, so `into_reader()` must
+        // uphold this.
+        let r = unsafe {
+            let raw: *mut dyn AsyncRead = Box::into_raw(r);
+            Box::from_raw(raw as *mut R)
+        };
+        Ok((m, *r))
     }
 }
 
@@ -487,6 +632,10 @@ impl<R: AsyncRead + Unpin> BinFuture<R> {
             .await
             .map(|_| (vec, self.reader))
     }
+
+    pub async fn into_value(self) -> IoResult<(Value, R)> {
+        self.into_vec().await.map(|(v, r)| (Value::Binary(v), r))
+    }
 }
 
 #[derive(Debug)]
@@ -499,6 +648,12 @@ impl<R: AsyncRead + Unpin> StringFuture<R> {
                 .map_err(|_| ErrorKind::InvalidData.into())
                 .map(|s| (s, r))
         })
+    }
+
+    pub async fn into_value(self) -> IoResult<(Value, R)> {
+        self.into_string()
+            .await
+            .map(|(s, r)| (Value::String(s.into()), r))
     }
 }
 
@@ -530,6 +685,12 @@ impl<R: AsyncRead + Unpin> ExtFuture<R> {
     pub async fn into_vec(self) -> IoResult<(i8, Vec<u8>, R)> {
         let ty = self.ty;
         self.bin.into_vec().await.map(|(v, r)| (ty, v, r))
+    }
+
+    pub async fn into_value(self) -> IoResult<(Value, R)> {
+        self.into_vec()
+            .await
+            .map(|(ty, v, r)| (Value::Ext(ty, v), r))
     }
 }
 
@@ -568,11 +729,17 @@ mod test {
             Ok(val)
         }
 
-        let val = value_to_vec(&true.into());
-        let val = futures::executor::LocalPool::new()
-            .run_until(bool_test(val))
+        let val = true.into();
+        let cursor = value_to_vec(&val);
+        let out = futures::executor::LocalPool::new()
+            .run_until(bool_test(cursor.clone()))
             .unwrap();
-        assert_eq!(val, true);
+        assert_eq!(out, true);
+
+        let (out, _r) = futures::executor::LocalPool::new()
+            .run_until(MsgPackFuture::new(cursor).into_value())
+            .unwrap();
+        assert_eq!(out, val);
     }
 
     #[test]
@@ -584,11 +751,17 @@ mod test {
             Ok(val)
         }
 
-        let val = value_to_vec(&25.5f32.into());
-        let val = futures::executor::LocalPool::new()
-            .run_until(f32_test(val))
+        let val = 25.5f32.into();
+        let cursor = value_to_vec(&val);
+        let out = futures::executor::LocalPool::new()
+            .run_until(f32_test(cursor.clone()))
             .unwrap();
-        assert_eq!(val, 25.5);
+        assert_eq!(out, 25.5);
+
+        let (out, _r) = futures::executor::LocalPool::new()
+            .run_until(MsgPackFuture::new(cursor).into_value())
+            .unwrap();
+        assert_eq!(out, val);
     }
 
     #[test]
@@ -600,11 +773,17 @@ mod test {
             Ok(val)
         }
 
-        let val = value_to_vec(&25.5f64.into());
-        let val = futures::executor::LocalPool::new()
-            .run_until(f64_test(val))
+        let val = 25.5f64.into();
+        let cursor = value_to_vec(&val);
+        let out = futures::executor::LocalPool::new()
+            .run_until(f64_test(cursor.clone()))
             .unwrap();
-        assert_eq!(val, 25.5);
+        assert_eq!(out, 25.5);
+
+        let (out, _r) = futures::executor::LocalPool::new()
+            .run_until(MsgPackFuture::new(cursor).into_value())
+            .unwrap();
+        assert_eq!(out, val);
     }
 
     #[test]
@@ -615,11 +794,17 @@ mod test {
             Ok(val)
         }
 
-        let val = value_to_vec(&vec![1u8, 2, 3, 4].into());
-        let val = futures::executor::LocalPool::new()
-            .run_until(bin_test(val))
+        let val = vec![1u8, 2, 3, 4].into();
+        let cursor = value_to_vec(&val);
+        let out = futures::executor::LocalPool::new()
+            .run_until(bin_test(cursor.clone()))
             .unwrap();
-        assert_eq!(val, vec![1u8, 2, 3, 4]);
+        assert_eq!(out, vec![1u8, 2, 3, 4]);
+
+        let (out, _r) = futures::executor::LocalPool::new()
+            .run_until(MsgPackFuture::new(cursor).into_value())
+            .unwrap();
+        assert_eq!(out, val);
     }
 
     #[test]
@@ -636,11 +821,17 @@ mod test {
             Ok(val)
         }
 
-        let val = value_to_vec(&"Hello world".into());
-        let val = futures::executor::LocalPool::new()
-            .run_until(string_test(val))
+        let val = "Hello world".into();
+        let cursor = value_to_vec(&val);
+        let out = futures::executor::LocalPool::new()
+            .run_until(string_test(cursor.clone()))
             .unwrap();
-        assert_eq!(val, "Hello world");
+        assert_eq!(out, "Hello world");
+
+        let (out, _r) = futures::executor::LocalPool::new()
+            .run_until(MsgPackFuture::new(cursor).into_value())
+            .unwrap();
+        assert_eq!(out, val);
     }
 
     #[test]
@@ -660,11 +851,16 @@ mod test {
             Ok(vec)
         }
         let val = Value::from(vec![Value::from(1), 2.into(), 3.into(), 4.into()]);
-        let val = value_to_vec(&val);
-        let val = futures::executor::LocalPool::new()
-            .run_until(array_test(val))
+        let cursor = value_to_vec(&val);
+        let out = futures::executor::LocalPool::new()
+            .run_until(array_test(cursor.clone()))
             .unwrap();
-        assert_eq!(val, vec![1, 2, 3, 4]);
+        assert_eq!(out, vec![1, 2, 3, 4]);
+
+        let (out, _r) = futures::executor::LocalPool::new()
+            .run_until(MsgPackFuture::new(cursor).into_value())
+            .unwrap();
+        assert_eq!(out, val);
     }
 
     #[test]
@@ -688,11 +884,15 @@ mod test {
             (Value::from(1), Value::from(2)),
             (Value::from(3), Value::from(4)),
         ]);
-        let val = value_to_vec(&val);
-        let val = futures::executor::LocalPool::new()
-            .run_until(map_test(val))
+        let cursor = value_to_vec(&val);
+        let out = futures::executor::LocalPool::new()
+            .run_until(map_test(cursor.clone()))
             .unwrap();
-        assert_eq!(val, vec![(1, 2), (3, 4)]);
+        assert_eq!(out, vec![(1, 2), (3, 4)]);
+        let (out, _r) = futures::executor::LocalPool::new()
+            .run_until(MsgPackFuture::new(cursor).into_value())
+            .unwrap();
+        assert_eq!(out, val);
     }
 
     #[test]
@@ -703,10 +903,16 @@ mod test {
             Ok((ty, val))
         }
 
-        let val = value_to_vec(&Value::Ext(42, vec![1u8, 2, 3, 4]));
-        let val = futures::executor::LocalPool::new()
-            .run_until(ext_test(val))
+        let val = Value::Ext(42, vec![1u8, 2, 3, 4]);
+        let cursor = value_to_vec(&val);
+        let out = futures::executor::LocalPool::new()
+            .run_until(ext_test(cursor.clone()))
             .unwrap();
-        assert_eq!(val, (42, vec![1, 2, 3, 4]));
+        assert_eq!(out, (42, vec![1, 2, 3, 4]));
+
+        let (out, _r) = futures::executor::LocalPool::new()
+            .run_until(MsgPackFuture::new(cursor).into_value())
+            .unwrap();
+        assert_eq!(out, val);
     }
 }
