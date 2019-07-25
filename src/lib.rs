@@ -1,5 +1,6 @@
 #![feature(async_await)]
 
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -20,6 +21,7 @@ pub enum ValueFuture<R> {
     Map(MapFuture<R>),
     Bin(BinFuture<R>),
     String(StringFuture<R>),
+    Ext(ExtFuture<R>),
 }
 
 impl<R> ValueFuture<R> {
@@ -42,6 +44,14 @@ impl<R> ValueFuture<R> {
     pub fn into_string(self) -> Option<StringFuture<R>> {
         if let ValueFuture::String(s) = self {
             Some(s)
+        } else {
+            None
+        }
+    }
+
+    pub fn into_ext(self) -> Option<ExtFuture<R>> {
+        if let ValueFuture::Ext(ext) = self {
+            Some(ext)
         } else {
             None
         }
@@ -251,7 +261,91 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
                     len: len as usize,
                 })
             }
-            _ => panic!("Unhandled type {:?}", marker),
+            Marker::FixExt1 => {
+                let ty = self.read_i8().await?;
+                ValueFuture::Ext(ExtFuture {
+                    bin: BinFuture {
+                        reader: self.reader,
+                        len: 1,
+                    },
+                    ty,
+                })
+            }
+            Marker::FixExt2 => {
+                let ty = self.read_i8().await?;
+                ValueFuture::Ext(ExtFuture {
+                    bin: BinFuture {
+                        reader: self.reader,
+                        len: 2,
+                    },
+                    ty,
+                })
+            }
+            Marker::FixExt4 => {
+                let ty = self.read_i8().await?;
+                ValueFuture::Ext(ExtFuture {
+                    bin: BinFuture {
+                        reader: self.reader,
+                        len: 4,
+                    },
+                    ty,
+                })
+            }
+            Marker::FixExt8 => {
+                let ty = self.read_i8().await?;
+                ValueFuture::Ext(ExtFuture {
+                    bin: BinFuture {
+                        reader: self.reader,
+                        len: 8,
+                    },
+                    ty,
+                })
+            }
+            Marker::FixExt16 => {
+                let ty = self.read_i8().await?;
+                ValueFuture::Ext(ExtFuture {
+                    bin: BinFuture {
+                        reader: self.reader,
+                        len: 16,
+                    },
+                    ty,
+                })
+            }
+            Marker::Ext8 => {
+                let len = self.read_u8().await?;
+                let ty = self.read_i8().await?;
+                ValueFuture::Ext(ExtFuture {
+                    bin: BinFuture {
+                        reader: self.reader,
+                        len: len.into(),
+                    },
+                    ty,
+                })
+            }
+            Marker::Ext16 => {
+                let len = self.read_u16().await?;
+                let ty = self.read_i8().await?;
+                ValueFuture::Ext(ExtFuture {
+                    bin: BinFuture {
+                        reader: self.reader,
+                        len: len.into(),
+                    },
+                    ty,
+                })
+            }
+            Marker::Ext32 => {
+                let len = self.read_u32().await?;
+                let ty = self.read_i8().await?;
+                ValueFuture::Ext(ExtFuture {
+                    bin: BinFuture {
+                        reader: self.reader,
+                        len: len as usize,
+                    },
+                    ty,
+                })
+            }
+            Marker::F32 | Marker::F64 => unimplemented!(),
+            Marker::Reserved => return Err(ErrorKind::InvalidData.into()),
         })
     }
 }
@@ -381,6 +475,51 @@ impl<R: AsyncRead + Unpin> StringFuture<R> {
     }
 }
 
+impl<R> Deref for StringFuture<R> {
+    type Target = BinFuture<R>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<R> DerefMut for StringFuture<R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Debug)]
+pub struct ExtFuture<R> {
+    bin: BinFuture<R>,
+    ty: i8,
+}
+
+impl<R: AsyncRead + Unpin> ExtFuture<R> {
+    pub fn ext_type(&self) -> i8 {
+        self.ty
+    }
+
+    pub async fn into_vec(self) -> IoResult<(i8, Vec<u8>, R)> {
+        let ty = self.ty;
+        self.bin.into_vec().await.map(|(v, r)| (ty, v, r))
+    }
+}
+
+impl<R> Deref for ExtFuture<R> {
+    type Target = BinFuture<R>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.bin
+    }
+}
+
+impl<R> DerefMut for ExtFuture<R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.bin
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -497,4 +636,18 @@ mod test {
         assert_eq!(val, vec![(1, 2), (3, 4)]);
     }
 
+    #[test]
+    fn ext() {
+        async fn ext_test(buf: Cursor<Vec<u8>>) -> IoResult<(i8, Vec<u8>)> {
+            let msg = MsgPackFuture::new(buf);
+            let (ty, val, _r) = msg.decode().await?.into_ext().unwrap().into_vec().await?;
+            Ok((ty, val))
+        }
+
+        let val = value_to_vec(&Value::Ext(42, vec![1u8, 2, 3, 4]));
+        let val = futures::executor::LocalPool::new()
+            .run_until(ext_test(val))
+            .unwrap();
+        assert_eq!(val, (42, vec![1, 2, 3, 4]));
+    }
 }
