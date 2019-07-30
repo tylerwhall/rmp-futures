@@ -1,5 +1,3 @@
-#![feature(async_await)]
-
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
