@@ -397,6 +397,22 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
             }
         }
     }
+
+    pub async fn write_map_len(&mut self, len: u32) -> IoResult<()> {
+        const U16MAX: u32 = std::u16::MAX as u32;
+
+        match len {
+            0..=15 => self.write_marker(Marker::FixMap(len as u8)).await,
+            16..=U16MAX => {
+                self.write_marker(Marker::Map16).await?;
+                self.write_u16(len as u16).await
+            }
+            _ => {
+                self.write_marker(Marker::Map32).await?;
+                self.write_u32(len).await
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -449,6 +465,16 @@ mod tests {
             test_jig(|c1, msg| {
                 rmp::encode::write_array_len(c1, *i).unwrap();
                 run_future(msg.write_array_len(*i)).unwrap();
+            });
+        }
+    }
+
+    #[test]
+    fn map_len() {
+        for i in &[0, 1, 15, 16, 65535, 65536, std::u32::MAX] {
+            test_jig(|c1, msg| {
+                rmp::encode::write_map_len(c1, *i).unwrap();
+                run_future(msg.write_map_len(*i)).unwrap();
             });
         }
     }
