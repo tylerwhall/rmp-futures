@@ -384,127 +384,161 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
 }
 
 #[cfg(test)]
-fn run_future<R>(f: impl Future<Output = R>) -> R {
-    futures::executor::LocalPool::new().run_until(f)
-}
+mod tests {
+    use super::*;
+    use std::io::Cursor;
 
-#[test]
-fn efficient_uint() {
-    fn test_against_rmpv<V: Into<u64> + Into<EfficientInt> + Copy>(val: V) {
-        use std::io::Cursor;
+    fn run_future<R>(f: impl Future<Output = R>) -> R {
+        futures::executor::LocalPool::new().run_until(f)
+    }
 
-        let mut c1 = Cursor::new(vec![0; 9]);
-        rmp::encode::write_uint(&mut c1, val.into()).unwrap();
+    /// Create a 2 writable cursors and wrap one in a `MsgPackSink` call a
+    /// function to write into each and compare the contents for equality.
+    fn test_jig<F>(f: F)
+    where
+        F: FnOnce(&mut Cursor<Vec<u8>>, &mut MsgPackSink<Cursor<Vec<u8>>>),
+    {
+        let mut c1 = Cursor::new(vec![0; 256]);
+        let mut msg = MsgPackSink::new(Cursor::new(vec![0; 256]));
+        f(&mut c1, &mut msg);
         let m1 = c1.into_inner();
-
-        let mut msg = MsgPackSink::new(Cursor::new(vec![0; 9]));
-        run_future(msg.write_int(val)).unwrap();
         let m2 = msg.into_inner().into_inner();
 
         assert_eq!(m1, m2);
     }
 
-    test_against_rmpv(1u8);
-    test_against_rmpv(127u8);
-    test_against_rmpv(128u8);
-    test_against_rmpv(255u8);
-
-    test_against_rmpv(1u16);
-    test_against_rmpv(127u16);
-    test_against_rmpv(128u16);
-    test_against_rmpv(255u16);
-    test_against_rmpv(256u16);
-    test_against_rmpv(65535u16);
-
-    test_against_rmpv(1u32);
-    test_against_rmpv(127u32);
-    test_against_rmpv(128u32);
-    test_against_rmpv(255u32);
-    test_against_rmpv(256u32);
-    test_against_rmpv(65535u32);
-    test_against_rmpv(65536u32);
-    test_against_rmpv(4_294_967_295u32);
-
-    test_against_rmpv(1u64);
-    test_against_rmpv(127u64);
-    test_against_rmpv(128u64);
-    test_against_rmpv(255u64);
-    test_against_rmpv(256u64);
-    test_against_rmpv(65535u64);
-    test_against_rmpv(65536u64);
-    test_against_rmpv(4_294_967_295u64);
-    test_against_rmpv(4_294_967_296u64);
-    test_against_rmpv(std::u64::MAX);
-}
-
-#[test]
-fn efficient_int() {
-    fn test_against_rmpv<V: Into<i64> + Into<EfficientInt> + Copy>(val: V) {
-        use std::io::Cursor;
-
-        let mut c1 = Cursor::new(vec![0; 9]);
-        rmp::encode::write_sint(&mut c1, val.into()).unwrap();
-        let m1 = c1.into_inner();
-
-        let mut msg = MsgPackSink::new(Cursor::new(vec![0; 9]));
-        run_future(msg.write_int(val)).unwrap();
-        let m2 = msg.into_inner().into_inner();
-
-        assert_eq!(m1, m2);
+    #[test]
+    fn nil() {
+        test_jig(|c1, msg| {
+            rmp::encode::write_nil(c1).unwrap();
+            run_future(msg.write_nil()).unwrap();
+        });
     }
 
-    test_against_rmpv(1i8);
-    test_against_rmpv(-1i8);
-    test_against_rmpv(-32i8);
-    test_against_rmpv(-33i8);
-    test_against_rmpv(127i8);
-    test_against_rmpv(-128i8);
+    #[test]
+    fn bool() {
+        test_jig(|c1, msg| {
+            rmp::encode::write_bool(c1, true).unwrap();
+            run_future(msg.write_bool(true)).unwrap();
+        });
+        test_jig(|c1, msg| {
+            rmp::encode::write_bool(c1, false).unwrap();
+            run_future(msg.write_bool(false)).unwrap();
+        });
+    }
 
-    test_against_rmpv(1i16);
-    test_against_rmpv(-1i16);
-    test_against_rmpv(-32i16);
-    test_against_rmpv(-33i16);
-    test_against_rmpv(127i16);
-    test_against_rmpv(128i16);
-    test_against_rmpv(-128i16);
-    test_against_rmpv(-129i16);
-    test_against_rmpv(255i16);
-    test_against_rmpv(256i16);
-    test_against_rmpv(-32768i16);
+    #[test]
+    fn efficient_uint() {
+        fn test_against_rmpv<V: Into<u64> + Into<EfficientInt> + Copy>(val: V) {
+            test_jig(|c1, msg| {
+                rmp::encode::write_uint(c1, val.into()).unwrap();
+                run_future(msg.write_int(val)).unwrap();
+            })
+        }
 
-    test_against_rmpv(1i32);
-    test_against_rmpv(-1i32);
-    test_against_rmpv(-32i32);
-    test_against_rmpv(-33i32);
-    test_against_rmpv(127i32);
-    test_against_rmpv(128i32);
-    test_against_rmpv(-128i32);
-    test_against_rmpv(-129i32);
-    test_against_rmpv(255i32);
-    test_against_rmpv(256i32);
-    test_against_rmpv(-32768i32);
-    test_against_rmpv(-32769i32);
-    test_against_rmpv(65535i32);
-    test_against_rmpv(65536i32);
-    test_against_rmpv(-2_147_483_648i32);
+        test_against_rmpv(1u8);
+        test_against_rmpv(127u8);
+        test_against_rmpv(128u8);
+        test_against_rmpv(255u8);
 
-    test_against_rmpv(1i64);
-    test_against_rmpv(-1i64);
-    test_against_rmpv(-32i64);
-    test_against_rmpv(-33i64);
-    test_against_rmpv(127i64);
-    test_against_rmpv(128i64);
-    test_against_rmpv(-128i64);
-    test_against_rmpv(-129i64);
-    test_against_rmpv(255i64);
-    test_against_rmpv(256i64);
-    test_against_rmpv(-32768i64);
-    test_against_rmpv(-32769i64);
-    test_against_rmpv(65535i64);
-    test_against_rmpv(65536i64);
-    test_against_rmpv(-2_147_483_648i64);
-    test_against_rmpv(-2_147_483_649i64);
-    test_against_rmpv(4_294_967_295i64);
-    test_against_rmpv(4_294_967_296i64);
-    test_against_rmpv(std::i64::MIN);
+        test_against_rmpv(1u16);
+        test_against_rmpv(127u16);
+        test_against_rmpv(128u16);
+        test_against_rmpv(255u16);
+        test_against_rmpv(256u16);
+        test_against_rmpv(65535u16);
+
+        test_against_rmpv(1u32);
+        test_against_rmpv(127u32);
+        test_against_rmpv(128u32);
+        test_against_rmpv(255u32);
+        test_against_rmpv(256u32);
+        test_against_rmpv(65535u32);
+        test_against_rmpv(65536u32);
+        test_against_rmpv(4_294_967_295u32);
+
+        test_against_rmpv(1u64);
+        test_against_rmpv(127u64);
+        test_against_rmpv(128u64);
+        test_against_rmpv(255u64);
+        test_against_rmpv(256u64);
+        test_against_rmpv(65535u64);
+        test_against_rmpv(65536u64);
+        test_against_rmpv(4_294_967_295u64);
+        test_against_rmpv(4_294_967_296u64);
+        test_against_rmpv(std::u64::MAX);
+    }
+
+    #[test]
+    fn efficient_int() {
+        fn test_against_rmpv<V: Into<i64> + Into<EfficientInt> + Copy>(val: V) {
+            use std::io::Cursor;
+
+            let mut c1 = Cursor::new(vec![0; 9]);
+            rmp::encode::write_sint(&mut c1, val.into()).unwrap();
+            let m1 = c1.into_inner();
+
+            let mut msg = MsgPackSink::new(Cursor::new(vec![0; 9]));
+            run_future(msg.write_int(val)).unwrap();
+            let m2 = msg.into_inner().into_inner();
+
+            assert_eq!(m1, m2);
+        }
+
+        test_against_rmpv(1i8);
+        test_against_rmpv(-1i8);
+        test_against_rmpv(-32i8);
+        test_against_rmpv(-33i8);
+        test_against_rmpv(127i8);
+        test_against_rmpv(-128i8);
+
+        test_against_rmpv(1i16);
+        test_against_rmpv(-1i16);
+        test_against_rmpv(-32i16);
+        test_against_rmpv(-33i16);
+        test_against_rmpv(127i16);
+        test_against_rmpv(128i16);
+        test_against_rmpv(-128i16);
+        test_against_rmpv(-129i16);
+        test_against_rmpv(255i16);
+        test_against_rmpv(256i16);
+        test_against_rmpv(-32768i16);
+
+        test_against_rmpv(1i32);
+        test_against_rmpv(-1i32);
+        test_against_rmpv(-32i32);
+        test_against_rmpv(-33i32);
+        test_against_rmpv(127i32);
+        test_against_rmpv(128i32);
+        test_against_rmpv(-128i32);
+        test_against_rmpv(-129i32);
+        test_against_rmpv(255i32);
+        test_against_rmpv(256i32);
+        test_against_rmpv(-32768i32);
+        test_against_rmpv(-32769i32);
+        test_against_rmpv(65535i32);
+        test_against_rmpv(65536i32);
+        test_against_rmpv(-2_147_483_648i32);
+
+        test_against_rmpv(1i64);
+        test_against_rmpv(-1i64);
+        test_against_rmpv(-32i64);
+        test_against_rmpv(-33i64);
+        test_against_rmpv(127i64);
+        test_against_rmpv(128i64);
+        test_against_rmpv(-128i64);
+        test_against_rmpv(-129i64);
+        test_against_rmpv(255i64);
+        test_against_rmpv(256i64);
+        test_against_rmpv(-32768i64);
+        test_against_rmpv(-32769i64);
+        test_against_rmpv(65535i64);
+        test_against_rmpv(65536i64);
+        test_against_rmpv(-2_147_483_648i64);
+        test_against_rmpv(-2_147_483_649i64);
+        test_against_rmpv(4_294_967_295i64);
+        test_against_rmpv(4_294_967_296i64);
+        test_against_rmpv(std::i64::MIN);
+    }
+
 }
