@@ -381,6 +381,22 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
     pub async fn write_int(&mut self, val: impl Into<EfficientInt>) -> IoResult<()> {
         self.write_efficient_int(val.into()).await
     }
+
+    pub async fn write_array_len(&mut self, len: u32) -> IoResult<()> {
+        const U16MAX: u32 = std::u16::MAX as u32;
+
+        match len {
+            0..=15 => self.write_marker(Marker::FixArray(len as u8)).await,
+            16..=U16MAX => {
+                self.write_marker(Marker::Array16).await?;
+                self.write_u16(len as u16).await
+            }
+            _ => {
+                self.write_marker(Marker::Array32).await?;
+                self.write_u32(len).await
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -425,6 +441,16 @@ mod tests {
             rmp::encode::write_bool(c1, false).unwrap();
             run_future(msg.write_bool(false)).unwrap();
         });
+    }
+
+    #[test]
+    fn array_len() {
+        for i in &[0, 1, 15, 16, 65535, 65536, std::u32::MAX] {
+            test_jig(|c1, msg| {
+                rmp::encode::write_array_len(c1, *i).unwrap();
+                run_future(msg.write_array_len(*i)).unwrap();
+            });
+        }
     }
 
     #[test]
