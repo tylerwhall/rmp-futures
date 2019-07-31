@@ -382,6 +382,20 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
         self.write_efficient_int(val.into()).await
     }
 
+    pub async fn write_f32(&mut self, val: f32) -> IoResult<()> {
+        self.write_marker(Marker::F32).await?;
+        let mut buf = [0u8; 4];
+        BigEndian::write_f32(&mut buf, val);
+        self.write_4(buf).await
+    }
+
+    pub async fn write_f64(&mut self, val: f64) -> IoResult<()> {
+        self.write_marker(Marker::F64).await?;
+        let mut buf = [0u8; 8];
+        BigEndian::write_f64(&mut buf, val);
+        self.write_8(buf).await
+    }
+
     pub async fn write_array_len(&mut self, len: u32) -> IoResult<()> {
         const U16MAX: u32 = std::u16::MAX as u32;
 
@@ -456,6 +470,18 @@ mod tests {
         test_jig(|c1, msg| {
             rmp::encode::write_bool(c1, false).unwrap();
             run_future(msg.write_bool(false)).unwrap();
+        });
+    }
+
+    #[test]
+    fn float() {
+        test_jig(|c1, msg| {
+            rmp::encode::write_f32(c1, 1.1).unwrap();
+            run_future(msg.write_f32(1.1)).unwrap();
+        });
+        test_jig(|c1, msg| {
+            rmp::encode::write_f64(c1, 1.1).unwrap();
+            run_future(msg.write_f64(1.1)).unwrap();
         });
     }
 
