@@ -550,17 +550,10 @@ mod tests {
     #[test]
     fn efficient_int() {
         fn test_against_rmpv<V: Into<i64> + Into<EfficientInt> + Copy>(val: V) {
-            use std::io::Cursor;
-
-            let mut c1 = Cursor::new(vec![0; 9]);
-            rmp::encode::write_sint(&mut c1, val.into()).unwrap();
-            let m1 = c1.into_inner();
-
-            let mut msg = MsgPackSink::new(Cursor::new(vec![0; 9]));
-            run_future(msg.write_int(val)).unwrap();
-            let m2 = msg.into_inner().into_inner();
-
-            assert_eq!(m1, m2);
+            test_jig(|c1, msg| {
+                rmp::encode::write_sint(c1, val.into()).unwrap();
+                run_future(msg.write_int(val)).unwrap();
+            })
         }
 
         test_against_rmpv(1i8);
