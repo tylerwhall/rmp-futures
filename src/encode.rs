@@ -9,19 +9,36 @@ use futures::prelude::*;
 /// The smallest representation of a uint based on its value
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EfficientInt {
-    Fix(u8),
+    FixPos(u8),
     U8(u8),
     U16(u16),
     U32(u32),
     U64(u64),
+    FixNeg(i8),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
 }
 
 impl From<u8> for EfficientInt {
     fn from(val: u8) -> Self {
         if val & 0x7f == val {
-            EfficientInt::Fix(val)
+            EfficientInt::FixPos(val)
         } else {
             EfficientInt::U8(val)
+        }
+    }
+}
+
+impl From<i8> for EfficientInt {
+    fn from(val: i8) -> Self {
+        if let Ok(val) = u8::try_from(val) {
+            val.into()
+        } else if val as u8 & 0b1110_0000 == 0b1110_0000 {
+            EfficientInt::FixNeg(val)
+        } else {
+            EfficientInt::I8(val)
         }
     }
 }
@@ -36,12 +53,36 @@ impl From<u16> for EfficientInt {
     }
 }
 
+impl From<i16> for EfficientInt {
+    fn from(val: i16) -> Self {
+        if let Ok(val) = u16::try_from(val) {
+            val.into()
+        } else if let Ok(val) = i8::try_from(val) {
+            val.into()
+        } else {
+            EfficientInt::I16(val)
+        }
+    }
+}
+
 impl From<u32> for EfficientInt {
     fn from(val: u32) -> Self {
         if let Ok(val) = u16::try_from(val) {
             val.into()
         } else {
             EfficientInt::U32(val)
+        }
+    }
+}
+
+impl From<i32> for EfficientInt {
+    fn from(val: i32) -> Self {
+        if let Ok(val) = u32::try_from(val) {
+            val.into()
+        } else if let Ok(val) = i16::try_from(val) {
+            val.into()
+        } else {
+            EfficientInt::I32(val)
         }
     }
 }
@@ -56,18 +97,40 @@ impl From<u64> for EfficientInt {
     }
 }
 
+impl From<i64> for EfficientInt {
+    fn from(val: i64) -> Self {
+        if let Ok(val) = u64::try_from(val) {
+            val.into()
+        } else if let Ok(val) = i32::try_from(val) {
+            val.into()
+        } else {
+            EfficientInt::I64(val)
+        }
+    }
+}
+
 #[test]
 fn efficient_u8() {
-    assert_eq!(EfficientInt::from(1u8), EfficientInt::Fix(1));
-    assert_eq!(EfficientInt::from(127u8), EfficientInt::Fix(127));
+    assert_eq!(EfficientInt::from(1u8), EfficientInt::FixPos(1));
+    assert_eq!(EfficientInt::from(127u8), EfficientInt::FixPos(127));
     assert_eq!(EfficientInt::from(128u8), EfficientInt::U8(128));
     assert_eq!(EfficientInt::from(255u8), EfficientInt::U8(255));
 }
 
 #[test]
+fn efficient_i8() {
+    assert_eq!(EfficientInt::from(1i8), EfficientInt::FixPos(1));
+    assert_eq!(EfficientInt::from(-1i8), EfficientInt::FixNeg(-1));
+    assert_eq!(EfficientInt::from(-32i8), EfficientInt::FixNeg(-32));
+    assert_eq!(EfficientInt::from(-33i8), EfficientInt::I8(-33));
+    assert_eq!(EfficientInt::from(127i8), EfficientInt::FixPos(127));
+    assert_eq!(EfficientInt::from(-128i8), EfficientInt::I8(-128));
+}
+
+#[test]
 fn efficient_u16() {
-    assert_eq!(EfficientInt::from(1u16), EfficientInt::Fix(1));
-    assert_eq!(EfficientInt::from(127u16), EfficientInt::Fix(127));
+    assert_eq!(EfficientInt::from(1u16), EfficientInt::FixPos(1));
+    assert_eq!(EfficientInt::from(127u16), EfficientInt::FixPos(127));
     assert_eq!(EfficientInt::from(128u16), EfficientInt::U8(128));
     assert_eq!(EfficientInt::from(255u16), EfficientInt::U8(255));
     assert_eq!(EfficientInt::from(256u16), EfficientInt::U16(256));
@@ -75,9 +138,24 @@ fn efficient_u16() {
 }
 
 #[test]
+fn efficient_i16() {
+    assert_eq!(EfficientInt::from(1i16), EfficientInt::FixPos(1));
+    assert_eq!(EfficientInt::from(-1i16), EfficientInt::FixNeg(-1));
+    assert_eq!(EfficientInt::from(-32i16), EfficientInt::FixNeg(-32));
+    assert_eq!(EfficientInt::from(-33i16), EfficientInt::I8(-33));
+    assert_eq!(EfficientInt::from(127i16), EfficientInt::FixPos(127));
+    assert_eq!(EfficientInt::from(128i16), EfficientInt::U8(128));
+    assert_eq!(EfficientInt::from(-128i16), EfficientInt::I8(-128));
+    assert_eq!(EfficientInt::from(-129i16), EfficientInt::I16(-129));
+    assert_eq!(EfficientInt::from(255i16), EfficientInt::U8(255));
+    assert_eq!(EfficientInt::from(256i16), EfficientInt::U16(256));
+    assert_eq!(EfficientInt::from(-32768i16), EfficientInt::I16(-32768));
+}
+
+#[test]
 fn efficient_u32() {
-    assert_eq!(EfficientInt::from(1u32), EfficientInt::Fix(1));
-    assert_eq!(EfficientInt::from(127u32), EfficientInt::Fix(127));
+    assert_eq!(EfficientInt::from(1u32), EfficientInt::FixPos(1));
+    assert_eq!(EfficientInt::from(127u32), EfficientInt::FixPos(127));
     assert_eq!(EfficientInt::from(128u32), EfficientInt::U8(128));
     assert_eq!(EfficientInt::from(255u32), EfficientInt::U8(255));
     assert_eq!(EfficientInt::from(256u32), EfficientInt::U16(256));
@@ -90,9 +168,31 @@ fn efficient_u32() {
 }
 
 #[test]
+fn efficient_i32() {
+    assert_eq!(EfficientInt::from(1i32), EfficientInt::FixPos(1));
+    assert_eq!(EfficientInt::from(-1i32), EfficientInt::FixNeg(-1));
+    assert_eq!(EfficientInt::from(-32i32), EfficientInt::FixNeg(-32));
+    assert_eq!(EfficientInt::from(-33i32), EfficientInt::I8(-33));
+    assert_eq!(EfficientInt::from(127i32), EfficientInt::FixPos(127));
+    assert_eq!(EfficientInt::from(128i32), EfficientInt::U8(128));
+    assert_eq!(EfficientInt::from(-128i32), EfficientInt::I8(-128));
+    assert_eq!(EfficientInt::from(-129i32), EfficientInt::I16(-129));
+    assert_eq!(EfficientInt::from(255i32), EfficientInt::U8(255));
+    assert_eq!(EfficientInt::from(256i32), EfficientInt::U16(256));
+    assert_eq!(EfficientInt::from(-32768i32), EfficientInt::I16(-32768));
+    assert_eq!(EfficientInt::from(-32769i32), EfficientInt::I32(-32769));
+    assert_eq!(EfficientInt::from(65535i32), EfficientInt::U16(65535));
+    assert_eq!(EfficientInt::from(65536i32), EfficientInt::U32(65536));
+    assert_eq!(
+        EfficientInt::from(-2_147_483_648i32),
+        EfficientInt::I32(-2_147_483_648i32)
+    );
+}
+
+#[test]
 fn efficient_u64() {
-    assert_eq!(EfficientInt::from(1u64), EfficientInt::Fix(1));
-    assert_eq!(EfficientInt::from(127u64), EfficientInt::Fix(127));
+    assert_eq!(EfficientInt::from(1u64), EfficientInt::FixPos(1));
+    assert_eq!(EfficientInt::from(127u64), EfficientInt::FixPos(127));
     assert_eq!(EfficientInt::from(128u64), EfficientInt::U8(128));
     assert_eq!(EfficientInt::from(255u64), EfficientInt::U8(255));
     assert_eq!(EfficientInt::from(256u64), EfficientInt::U16(256));
@@ -109,6 +209,40 @@ fn efficient_u64() {
     assert_eq!(
         EfficientInt::from(std::u64::MAX),
         EfficientInt::U64(std::u64::MAX)
+    );
+}
+
+#[test]
+fn efficient_i64() {
+    assert_eq!(EfficientInt::from(1i64), EfficientInt::FixPos(1));
+    assert_eq!(EfficientInt::from(-1i64), EfficientInt::FixNeg(-1));
+    assert_eq!(EfficientInt::from(-32i64), EfficientInt::FixNeg(-32));
+    assert_eq!(EfficientInt::from(-33i64), EfficientInt::I8(-33));
+    assert_eq!(EfficientInt::from(127i64), EfficientInt::FixPos(127));
+    assert_eq!(EfficientInt::from(128i64), EfficientInt::U8(128));
+    assert_eq!(EfficientInt::from(-128i64), EfficientInt::I8(-128));
+    assert_eq!(EfficientInt::from(-129i64), EfficientInt::I16(-129));
+    assert_eq!(EfficientInt::from(255i64), EfficientInt::U8(255));
+    assert_eq!(EfficientInt::from(256i64), EfficientInt::U16(256));
+    assert_eq!(EfficientInt::from(-32768i64), EfficientInt::I16(-32768));
+    assert_eq!(EfficientInt::from(-32769i64), EfficientInt::I32(-32769));
+    assert_eq!(EfficientInt::from(65535i64), EfficientInt::U16(65535));
+    assert_eq!(EfficientInt::from(65536i64), EfficientInt::U32(65536));
+    assert_eq!(
+        EfficientInt::from(-2_147_483_648i64),
+        EfficientInt::I32(-2_147_483_648i32)
+    );
+    assert_eq!(
+        EfficientInt::from(4_294_967_295i64),
+        EfficientInt::U32(4_294_967_295)
+    );
+    assert_eq!(
+        EfficientInt::from(4_294_967_296i64),
+        EfficientInt::U64(4_294_967_296)
+    );
+    assert_eq!(
+        EfficientInt::from(std::i64::MIN),
+        EfficientInt::I64(std::i64::MIN)
     );
 }
 
@@ -203,9 +337,9 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
         }
     }
 
-    async fn write_efficient_uint(&mut self, val: EfficientInt) -> IoResult<()> {
+    async fn write_efficient_int(&mut self, val: EfficientInt) -> IoResult<()> {
         match val {
-            EfficientInt::Fix(val) => self.write_marker(Marker::FixPos(val)).await?,
+            EfficientInt::FixPos(val) => self.write_marker(Marker::FixPos(val)).await?,
             EfficientInt::U8(val) => {
                 self.write_marker(Marker::U8).await?;
                 self.write_u8(val).await?;
@@ -222,13 +356,30 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
                 self.write_marker(Marker::U64).await?;
                 self.write_u64(val).await?;
             }
+            EfficientInt::FixNeg(val) => self.write_marker(Marker::FixNeg(val)).await?,
+            EfficientInt::I8(val) => {
+                self.write_marker(Marker::I8).await?;
+                self.write_i8(val).await?;
+            }
+            EfficientInt::I16(val) => {
+                self.write_marker(Marker::I16).await?;
+                self.write_i16(val).await?;
+            }
+            EfficientInt::I32(val) => {
+                self.write_marker(Marker::I32).await?;
+                self.write_i32(val).await?;
+            }
+            EfficientInt::I64(val) => {
+                self.write_marker(Marker::I64).await?;
+                self.write_i64(val).await?;
+            }
         }
         Ok(())
     }
 
-    /// Write any unsigned int (u8-u64) in the most efficient representation
-    pub async fn write_uint(&mut self, val: impl Into<EfficientInt>) -> IoResult<()> {
-        self.write_efficient_uint(val.into()).await
+    /// Write any int (u8-u64,i8-i64) in the most efficient representation
+    pub async fn write_int(&mut self, val: impl Into<EfficientInt>) -> IoResult<()> {
+        self.write_efficient_int(val.into()).await
     }
 }
 
@@ -247,7 +398,7 @@ fn efficient_uint() {
         let m1 = c1.into_inner();
 
         let mut msg = MsgPackSink::new(Cursor::new(vec![0; 9]));
-        run_future(msg.write_uint(val)).unwrap();
+        run_future(msg.write_int(val)).unwrap();
         let m2 = msg.into_inner().into_inner();
 
         assert_eq!(m1, m2);
@@ -284,4 +435,76 @@ fn efficient_uint() {
     test_against_rmpv(4_294_967_295u64);
     test_against_rmpv(4_294_967_296u64);
     test_against_rmpv(std::u64::MAX);
+}
+
+#[test]
+fn efficient_int() {
+    fn test_against_rmpv<V: Into<i64> + Into<EfficientInt> + Copy>(val: V) {
+        use std::io::Cursor;
+
+        let mut c1 = Cursor::new(vec![0; 9]);
+        rmp::encode::write_sint(&mut c1, val.into()).unwrap();
+        let m1 = c1.into_inner();
+
+        let mut msg = MsgPackSink::new(Cursor::new(vec![0; 9]));
+        run_future(msg.write_int(val)).unwrap();
+        let m2 = msg.into_inner().into_inner();
+
+        assert_eq!(m1, m2);
+    }
+
+    test_against_rmpv(1i8);
+    test_against_rmpv(-1i8);
+    test_against_rmpv(-32i8);
+    test_against_rmpv(-33i8);
+    test_against_rmpv(127i8);
+    test_against_rmpv(-128i8);
+
+    test_against_rmpv(1i16);
+    test_against_rmpv(-1i16);
+    test_against_rmpv(-32i16);
+    test_against_rmpv(-33i16);
+    test_against_rmpv(127i16);
+    test_against_rmpv(128i16);
+    test_against_rmpv(-128i16);
+    test_against_rmpv(-129i16);
+    test_against_rmpv(255i16);
+    test_against_rmpv(256i16);
+    test_against_rmpv(-32768i16);
+
+    test_against_rmpv(1i32);
+    test_against_rmpv(-1i32);
+    test_against_rmpv(-32i32);
+    test_against_rmpv(-33i32);
+    test_against_rmpv(127i32);
+    test_against_rmpv(128i32);
+    test_against_rmpv(-128i32);
+    test_against_rmpv(-129i32);
+    test_against_rmpv(255i32);
+    test_against_rmpv(256i32);
+    test_against_rmpv(-32768i32);
+    test_against_rmpv(-32769i32);
+    test_against_rmpv(65535i32);
+    test_against_rmpv(65536i32);
+    test_against_rmpv(-2_147_483_648i32);
+
+    test_against_rmpv(1i64);
+    test_against_rmpv(-1i64);
+    test_against_rmpv(-32i64);
+    test_against_rmpv(-33i64);
+    test_against_rmpv(127i64);
+    test_against_rmpv(128i64);
+    test_against_rmpv(-128i64);
+    test_against_rmpv(-129i64);
+    test_against_rmpv(255i64);
+    test_against_rmpv(256i64);
+    test_against_rmpv(-32768i64);
+    test_against_rmpv(-32769i64);
+    test_against_rmpv(65535i64);
+    test_against_rmpv(65536i64);
+    test_against_rmpv(-2_147_483_648i64);
+    test_against_rmpv(-2_147_483_649i64);
+    test_against_rmpv(4_294_967_295i64);
+    test_against_rmpv(4_294_967_296i64);
+    test_against_rmpv(std::i64::MIN);
 }
