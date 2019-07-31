@@ -449,6 +449,31 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
         self.write_bin_len(data.len().try_into().unwrap()).await?;
         self.writer.write_all(data).await
     }
+
+    /// Encodes and attempts to write the most efficient binary array length
+    /// representation
+    pub async fn write_str_len(&mut self, len: u32) -> IoResult<()> {
+        if let Ok(len) = u8::try_from(len) {
+            if len < 32 {
+                self.write_marker(Marker::FixStr(len)).await
+            } else {
+                self.write_marker(Marker::Str8).await?;
+                self.write_u8(len).await
+            }
+        } else if let Ok(len) = u16::try_from(len) {
+            self.write_marker(Marker::Str16).await?;
+            self.write_u16(len).await
+        } else {
+            self.write_marker(Marker::Str32).await?;
+            self.write_u32(len).await
+        }
+    }
+
+    /// Encodes and attempts to write the most efficient binary representation
+    pub async fn write_str(&mut self, string: &str) -> IoResult<()> {
+        self.write_str_len(string.len().try_into().unwrap()).await?;
+        self.writer.write_all(string.as_bytes()).await
+    }
 }
 
 #[cfg(test)]
@@ -539,6 +564,20 @@ mod tests {
             let buf = [1, 2, 3, 4];
             rmp::encode::write_bin(c1, &buf).unwrap();
             run_future(msg.write_bin(&buf)).unwrap();
+        });
+    }
+
+    #[test]
+    fn string() {
+        for i in &[0, 1, 31, 32, 255, 256, 65535, 65536, std::u32::MAX] {
+            test_jig(|c1, msg| {
+                rmp::encode::write_str_len(c1, *i).unwrap();
+                run_future(msg.write_str_len(*i)).unwrap();
+            });
+        }
+        test_jig(|c1, msg| {
+            rmp::encode::write_str(c1, "hello").unwrap();
+            run_future(msg.write_str("hello")).unwrap();
         });
     }
 
