@@ -474,6 +474,54 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
         self.write_str_len(string.len().try_into().unwrap()).await?;
         self.writer.write_all(string.as_bytes()).await
     }
+
+    /// Encodes and attempts to write the most efficient ext metadata
+    /// representation
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ty` is negative, because it is reserved for future MessagePack
+    /// extension including 2-byte type information.
+    pub async fn write_ext_meta(&mut self, len: u32, ty: i8) -> IoResult<()> {
+        assert!(ty >= 0);
+
+        if let Ok(len) = u8::try_from(len) {
+            match len {
+                1 => {
+                    self.write_marker(Marker::FixExt1).await?;
+                }
+                2 => {
+                    self.write_marker(Marker::FixExt2).await?;
+                }
+                4 => {
+                    self.write_marker(Marker::FixExt4).await?;
+                }
+                8 => {
+                    self.write_marker(Marker::FixExt8).await?;
+                }
+                16 => {
+                    self.write_marker(Marker::FixExt16).await?;
+                }
+                len => {
+                    self.write_marker(Marker::Ext8).await?;
+                    self.write_u8(len).await?;
+                }
+            }
+        } else if let Ok(len) = u16::try_from(len) {
+            self.write_marker(Marker::Ext16).await?;
+            self.write_u16(len).await?;
+        } else {
+            self.write_marker(Marker::Ext32).await?;
+            self.write_u32(len).await?;
+        }
+        self.write_u8(ty as u8).await
+    }
+
+    pub async fn write_ext(&mut self, data: &[u8], ty: i8) -> IoResult<()> {
+        self.write_ext_meta(data.len().try_into().unwrap(), ty)
+            .await?;
+        self.writer.write_all(data).await
+    }
 }
 
 #[cfg(test)]
@@ -565,6 +613,16 @@ mod tests {
             rmp::encode::write_bin(c1, &buf).unwrap();
             run_future(msg.write_bin(&buf)).unwrap();
         });
+    }
+
+    #[test]
+    fn ext() {
+        for i in &[0, 1, 2, 4, 8, 16, 17, 255, 256, 65535, 65536, std::u32::MAX] {
+            test_jig(|c1, msg| {
+                rmp::encode::write_ext_meta(c1, *i, 42).unwrap();
+                run_future(msg.write_ext_meta(*i, 42)).unwrap();
+            });
+        }
     }
 
     #[test]
