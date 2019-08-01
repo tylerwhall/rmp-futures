@@ -2,6 +2,7 @@ use std::convert::TryFrom;
 use std::convert::TryInto;
 
 use rmp::Marker;
+use rmpv::Value;
 
 use byteorder::{BigEndian, ByteOrder};
 use futures::io::Result as IoResult;
@@ -470,9 +471,14 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
     }
 
     /// Encodes and attempts to write the most efficient binary representation
-    pub async fn write_str(&mut self, string: &str) -> IoResult<()> {
+    pub async fn write_str_bytes(&mut self, string: &[u8]) -> IoResult<()> {
         self.write_str_len(string.len().try_into().unwrap()).await?;
-        self.writer.write_all(string.as_bytes()).await
+        self.writer.write_all(string).await
+    }
+
+    /// Encodes and attempts to write the most efficient binary representation
+    pub async fn write_str(&mut self, string: &str) -> IoResult<()> {
+        self.write_str_bytes(string.as_bytes()).await
     }
 
     /// Encodes and attempts to write the most efficient ext metadata
@@ -522,6 +528,48 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
             .await?;
         self.writer.write_all(data).await
     }
+
+    /// Encodes and attempts to write a dynamic `rmpv::Value`
+    ///
+    /// # Panics
+    ///
+    /// Panics if array or map length exceeds 2^32-1
+    pub async fn write_value(&mut self, value: &Value) -> IoResult<()> {
+        match value {
+            Value::Nil => self.write_nil().await?,
+            Value::Boolean(val) => self.write_bool(*val).await?,
+            Value::Integer(val) => {
+                if let Some(val) = val.as_i64() {
+                    self.write_int(val).await?
+                } else if let Some(val) = val.as_u64() {
+                    self.write_int(val).await?
+                } else {
+                    unreachable!()
+                }
+            }
+            Value::F32(val) => self.write_f32(*val).await?,
+            Value::F64(val) => self.write_f64(*val).await?,
+            Value::String(val) => self.write_str_bytes(val.as_bytes()).await?,
+            Value::Binary(val) => self.write_bin(val).await?,
+            Value::Array(a) => {
+                self.write_array_len(a.len().try_into().unwrap()).await?;
+                for elem in a.iter() {
+                    // Box future to allow recursion
+                    self.write_value(elem).boxed_local().await?;
+                }
+            }
+            Value::Map(m) => {
+                self.write_map_len(m.len().try_into().unwrap()).await?;
+                for (k, v) in m.iter() {
+                    // Box future to allow recursion
+                    self.write_value(k).boxed_local().await?;
+                    self.write_value(v).boxed_local().await?;
+                }
+            }
+            Value::Ext(ty, bytes) => self.write_ext(bytes, *ty).await?,
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -534,18 +582,29 @@ mod tests {
     }
 
     /// Create a 2 writable cursors and wrap one in a `MsgPackSink` call a
-    /// function to write into each and compare the contents for equality.
+    /// function to write with rmp::encode and MsgPackSink, and return an
+    /// optional rmpv::Value that will get encoded with MsgPackSink::write_value.
+    /// All three will be checked for equality.
     fn test_jig<F>(f: F)
     where
-        F: FnOnce(&mut Cursor<Vec<u8>>, &mut MsgPackSink<Cursor<Vec<u8>>>),
+        F: FnOnce(&mut Cursor<Vec<u8>>, &mut MsgPackSink<Cursor<Vec<u8>>>) -> Option<Value>,
     {
         let mut c1 = Cursor::new(vec![0; 256]);
-        let mut msg = MsgPackSink::new(Cursor::new(vec![0; 256]));
-        f(&mut c1, &mut msg);
-        let m1 = c1.into_inner();
-        let m2 = msg.into_inner().into_inner();
+        let mut msg1 = MsgPackSink::new(Cursor::new(vec![0; 256]));
+        let val = f(&mut c1, &mut msg1);
 
-        assert_eq!(m1, m2);
+        let b1 = c1.into_inner();
+        let b2 = msg1.into_inner().into_inner();
+
+        assert_eq!(b1, b2);
+
+        if let Some(val) = val {
+            let mut msg2 = MsgPackSink::new(Cursor::new(vec![0; 256]));
+            // Encode the `Value`
+            run_future(msg2.write_value(&val)).unwrap();
+            let b3 = msg2.into_inner().into_inner();
+            assert_eq!(b1, b3);
+        }
     }
 
     #[test]
@@ -553,6 +612,7 @@ mod tests {
         test_jig(|c1, msg| {
             rmp::encode::write_nil(c1).unwrap();
             run_future(msg.write_nil()).unwrap();
+            Some(Value::Nil)
         });
     }
 
@@ -561,10 +621,12 @@ mod tests {
         test_jig(|c1, msg| {
             rmp::encode::write_bool(c1, true).unwrap();
             run_future(msg.write_bool(true)).unwrap();
+            Some(Value::Boolean(true))
         });
         test_jig(|c1, msg| {
             rmp::encode::write_bool(c1, false).unwrap();
             run_future(msg.write_bool(false)).unwrap();
+            Some(Value::Boolean(false))
         });
     }
 
@@ -573,10 +635,12 @@ mod tests {
         test_jig(|c1, msg| {
             rmp::encode::write_f32(c1, 1.1).unwrap();
             run_future(msg.write_f32(1.1)).unwrap();
+            Some(Value::F32(1.1))
         });
         test_jig(|c1, msg| {
             rmp::encode::write_f64(c1, 1.1).unwrap();
             run_future(msg.write_f64(1.1)).unwrap();
+            Some(Value::F64(1.1))
         });
     }
 
@@ -586,8 +650,20 @@ mod tests {
             test_jig(|c1, msg| {
                 rmp::encode::write_array_len(c1, *i).unwrap();
                 run_future(msg.write_array_len(*i)).unwrap();
+                None
             });
         }
+    }
+
+    #[test]
+    fn array() {
+        test_jig(|c1, msg| {
+            rmp::encode::write_array_len(c1, 1).unwrap();
+            rmp::encode::write_uint(c1, 1).unwrap();
+            run_future(msg.write_array_len(1)).unwrap();
+            run_future(msg.write_int(1)).unwrap();
+            Some(Value::Array(vec![1.into()]))
+        })
     }
 
     #[test]
@@ -596,6 +672,7 @@ mod tests {
             test_jig(|c1, msg| {
                 rmp::encode::write_map_len(c1, *i).unwrap();
                 run_future(msg.write_map_len(*i)).unwrap();
+                None
             });
         }
     }
@@ -606,12 +683,14 @@ mod tests {
             test_jig(|c1, msg| {
                 rmp::encode::write_bin_len(c1, *i).unwrap();
                 run_future(msg.write_bin_len(*i)).unwrap();
+                None
             });
         }
         test_jig(|c1, msg| {
             let buf = [1, 2, 3, 4];
             rmp::encode::write_bin(c1, &buf).unwrap();
             run_future(msg.write_bin(&buf)).unwrap();
+            Some(Value::Binary(buf[..].into()))
         });
     }
 
@@ -621,6 +700,7 @@ mod tests {
             test_jig(|c1, msg| {
                 rmp::encode::write_ext_meta(c1, *i, 42).unwrap();
                 run_future(msg.write_ext_meta(*i, 42)).unwrap();
+                None
             });
         }
     }
@@ -631,20 +711,23 @@ mod tests {
             test_jig(|c1, msg| {
                 rmp::encode::write_str_len(c1, *i).unwrap();
                 run_future(msg.write_str_len(*i)).unwrap();
+                None
             });
         }
         test_jig(|c1, msg| {
             rmp::encode::write_str(c1, "hello").unwrap();
             run_future(msg.write_str("hello")).unwrap();
+            Some("hello".into())
         });
     }
 
     #[test]
     fn efficient_uint() {
-        fn test_against_rmpv<V: Into<u64> + Into<EfficientInt> + Copy>(val: V) {
+        fn test_against_rmpv<V: Into<u64> + Into<EfficientInt> + Into<Value> + Copy>(val: V) {
             test_jig(|c1, msg| {
                 rmp::encode::write_uint(c1, val.into()).unwrap();
                 run_future(msg.write_int(val)).unwrap();
+                Some(val.into())
             })
         }
 
@@ -683,10 +766,11 @@ mod tests {
 
     #[test]
     fn efficient_int() {
-        fn test_against_rmpv<V: Into<i64> + Into<EfficientInt> + Copy>(val: V) {
+        fn test_against_rmpv<V: Into<i64> + Into<EfficientInt> + Into<Value> + Copy>(val: V) {
             test_jig(|c1, msg| {
                 rmp::encode::write_sint(c1, val.into()).unwrap();
                 run_future(msg.write_int(val)).unwrap();
+                Some(val.into())
             })
         }
 
