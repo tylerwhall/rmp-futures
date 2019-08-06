@@ -756,6 +756,10 @@ impl<R: AsyncRead + Unpin> StringFuture<R> {
         })
     }
 
+    pub async fn read_all(self, buf: &mut [u8]) -> IoResult<R> {
+        self.0.read_all(buf).await
+    }
+
     pub async fn skip(self) -> IoResult<R> {
         self.0.skip().await
     }
@@ -795,6 +799,10 @@ impl<R: AsyncRead + Unpin> ExtFuture<R> {
     pub async fn into_vec(self) -> IoResult<(i8, Vec<u8>, R)> {
         let ty = self.ty;
         self.bin.into_vec().await.map(|(v, r)| (ty, v, r))
+    }
+
+    pub async fn read_all(self, buf: &mut [u8]) -> IoResult<R> {
+        self.bin.read_all(buf).await
     }
 
     pub async fn skip(self) -> IoResult<R> {
