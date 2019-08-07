@@ -1,5 +1,7 @@
 use std::convert::TryFrom;
 use std::convert::TryInto;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use rmp::Marker;
 use rmpv::Value;
@@ -582,6 +584,20 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
             }
             Value::Ext(ty, bytes) => self.write_ext(bytes, *ty).await,
         }
+    }
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for MsgPackSink<W> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<IoResult<usize>> {
+        W::poll_write(Pin::new(&mut self.as_mut().writer), cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<IoResult<()>> {
+        W::poll_flush(Pin::new(&mut self.as_mut().writer), cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<IoResult<()>> {
+        W::poll_close(Pin::new(&mut self.as_mut().writer), cx)
     }
 }
 
