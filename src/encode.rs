@@ -261,6 +261,11 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
         self.writer
     }
 
+    async fn write_all(mut self, bytes: &[u8]) -> IoResult<Self> {
+        self.writer.write_all(bytes).await?;
+        Ok(self)
+    }
+
     async fn write_1(&mut self, val: [u8; 1]) -> IoResult<()> {
         self.writer.write_all(&val).await
     }
@@ -327,78 +332,80 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
         self.write_u8(marker.to_u8()).await
     }
 
-    pub async fn write_nil(&mut self) -> IoResult<()> {
-        self.write_marker(Marker::Null).await
+    pub async fn write_nil(mut self) -> IoResult<Self> {
+        self.write_marker(Marker::Null).await.map(|()| self)
     }
 
-    pub async fn write_bool(&mut self, val: bool) -> IoResult<()> {
+    pub async fn write_bool(mut self, val: bool) -> IoResult<Self> {
         if val {
-            self.write_marker(Marker::True).await
+            self.write_marker(Marker::True)
         } else {
-            self.write_marker(Marker::False).await
+            self.write_marker(Marker::False)
         }
+        .await
+        .map(|()| self)
     }
 
-    async fn write_efficient_int(&mut self, val: EfficientInt) -> IoResult<()> {
+    async fn write_efficient_int(mut self, val: EfficientInt) -> IoResult<Self> {
         match val {
-            EfficientInt::FixPos(val) => self.write_marker(Marker::FixPos(val)).await?,
+            EfficientInt::FixPos(val) => self.write_marker(Marker::FixPos(val)).await,
             EfficientInt::U8(val) => {
                 self.write_marker(Marker::U8).await?;
-                self.write_u8(val).await?;
+                self.write_u8(val).await
             }
             EfficientInt::U16(val) => {
                 self.write_marker(Marker::U16).await?;
-                self.write_u16(val).await?;
+                self.write_u16(val).await
             }
             EfficientInt::U32(val) => {
                 self.write_marker(Marker::U32).await?;
-                self.write_u32(val).await?;
+                self.write_u32(val).await
             }
             EfficientInt::U64(val) => {
                 self.write_marker(Marker::U64).await?;
-                self.write_u64(val).await?;
+                self.write_u64(val).await
             }
-            EfficientInt::FixNeg(val) => self.write_marker(Marker::FixNeg(val)).await?,
+            EfficientInt::FixNeg(val) => self.write_marker(Marker::FixNeg(val)).await,
             EfficientInt::I8(val) => {
                 self.write_marker(Marker::I8).await?;
-                self.write_i8(val).await?;
+                self.write_i8(val).await
             }
             EfficientInt::I16(val) => {
                 self.write_marker(Marker::I16).await?;
-                self.write_i16(val).await?;
+                self.write_i16(val).await
             }
             EfficientInt::I32(val) => {
                 self.write_marker(Marker::I32).await?;
-                self.write_i32(val).await?;
+                self.write_i32(val).await
             }
             EfficientInt::I64(val) => {
                 self.write_marker(Marker::I64).await?;
-                self.write_i64(val).await?;
+                self.write_i64(val).await
             }
         }
-        Ok(())
+        .map(|()| self)
     }
 
     /// Write any int (u8-u64,i8-i64) in the most efficient representation
-    pub async fn write_int(&mut self, val: impl Into<EfficientInt>) -> IoResult<()> {
+    pub async fn write_int(self, val: impl Into<EfficientInt>) -> IoResult<Self> {
         self.write_efficient_int(val.into()).await
     }
 
-    pub async fn write_f32(&mut self, val: f32) -> IoResult<()> {
+    pub async fn write_f32(mut self, val: f32) -> IoResult<Self> {
         self.write_marker(Marker::F32).await?;
         let mut buf = [0u8; 4];
         BigEndian::write_f32(&mut buf, val);
-        self.write_4(buf).await
+        self.write_4(buf).await.map(|()| self)
     }
 
-    pub async fn write_f64(&mut self, val: f64) -> IoResult<()> {
+    pub async fn write_f64(mut self, val: f64) -> IoResult<Self> {
         self.write_marker(Marker::F64).await?;
         let mut buf = [0u8; 8];
         BigEndian::write_f64(&mut buf, val);
-        self.write_8(buf).await
+        self.write_8(buf).await.map(|()| self)
     }
 
-    pub async fn write_array_len(&mut self, len: u32) -> IoResult<()> {
+    pub async fn write_array_len(mut self, len: u32) -> IoResult<Self> {
         const U16MAX: u32 = std::u16::MAX as u32;
 
         match len {
@@ -412,9 +419,10 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
                 self.write_u32(len).await
             }
         }
+        .map(|()| self)
     }
 
-    pub async fn write_map_len(&mut self, len: u32) -> IoResult<()> {
+    pub async fn write_map_len(mut self, len: u32) -> IoResult<Self> {
         const U16MAX: u32 = std::u16::MAX as u32;
 
         match len {
@@ -428,11 +436,12 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
                 self.write_u32(len).await
             }
         }
+        .map(|()| self)
     }
 
     /// Encodes and attempts to write the most efficient binary array length
     /// representation
-    pub async fn write_bin_len(&mut self, len: u32) -> IoResult<()> {
+    pub async fn write_bin_len(mut self, len: u32) -> IoResult<Self> {
         if let Ok(len) = u8::try_from(len) {
             self.write_marker(Marker::Bin8).await?;
             self.write_u8(len).await
@@ -443,17 +452,18 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
             self.write_marker(Marker::Bin32).await?;
             self.write_u32(len).await
         }
+        .map(|()| self)
     }
 
     /// Encodes and attempts to write the most efficient binary representation
-    pub async fn write_bin(&mut self, data: &[u8]) -> IoResult<()> {
-        self.write_bin_len(data.len().try_into().unwrap()).await?;
-        self.writer.write_all(data).await
+    pub async fn write_bin(self, data: &[u8]) -> IoResult<Self> {
+        let s = self.write_bin_len(data.len().try_into().unwrap()).await?;
+        s.write_all(data).await
     }
 
     /// Encodes and attempts to write the most efficient binary array length
     /// representation
-    pub async fn write_str_len(&mut self, len: u32) -> IoResult<()> {
+    pub async fn write_str_len(mut self, len: u32) -> IoResult<Self> {
         if let Ok(len) = u8::try_from(len) {
             if len < 32 {
                 self.write_marker(Marker::FixStr(len)).await
@@ -468,16 +478,17 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
             self.write_marker(Marker::Str32).await?;
             self.write_u32(len).await
         }
+        .map(|()| self)
     }
 
     /// Encodes and attempts to write the most efficient binary representation
-    pub async fn write_str_bytes(&mut self, string: &[u8]) -> IoResult<()> {
-        self.write_str_len(string.len().try_into().unwrap()).await?;
-        self.writer.write_all(string).await
+    pub async fn write_str_bytes(self, string: &[u8]) -> IoResult<Self> {
+        let s = self.write_str_len(string.len().try_into().unwrap()).await?;
+        s.write_all(string).await
     }
 
     /// Encodes and attempts to write the most efficient binary representation
-    pub async fn write_str(&mut self, string: &str) -> IoResult<()> {
+    pub async fn write_str(self, string: &str) -> IoResult<Self> {
         self.write_str_bytes(string.as_bytes()).await
     }
 
@@ -488,7 +499,7 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
     ///
     /// Panics if `ty` is negative, because it is reserved for future MessagePack
     /// extension including 2-byte type information.
-    pub async fn write_ext_meta(&mut self, len: u32, ty: i8) -> IoResult<()> {
+    pub async fn write_ext_meta(mut self, len: u32, ty: i8) -> IoResult<Self> {
         assert!(ty >= 0);
 
         if let Ok(len) = u8::try_from(len) {
@@ -520,13 +531,14 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
             self.write_marker(Marker::Ext32).await?;
             self.write_u32(len).await?;
         }
-        self.write_u8(ty as u8).await
+        self.write_u8(ty as u8).await.map(|()| self)
     }
 
-    pub async fn write_ext(&mut self, data: &[u8], ty: i8) -> IoResult<()> {
-        self.write_ext_meta(data.len().try_into().unwrap(), ty)
+    pub async fn write_ext(self, data: &[u8], ty: i8) -> IoResult<Self> {
+        let s = self
+            .write_ext_meta(data.len().try_into().unwrap(), ty)
             .await?;
-        self.writer.write_all(data).await
+        s.write_all(data).await
     }
 
     /// Encodes and attempts to write a dynamic `rmpv::Value`
@@ -534,41 +546,42 @@ impl<W: AsyncWrite + Unpin> MsgPackSink<W> {
     /// # Panics
     ///
     /// Panics if array or map length exceeds 2^32-1
-    pub async fn write_value(&mut self, value: &Value) -> IoResult<()> {
+    pub async fn write_value(self, value: &Value) -> IoResult<Self> {
         match value {
-            Value::Nil => self.write_nil().await?,
-            Value::Boolean(val) => self.write_bool(*val).await?,
+            Value::Nil => self.write_nil().await,
+            Value::Boolean(val) => self.write_bool(*val).await,
             Value::Integer(val) => {
                 if let Some(val) = val.as_i64() {
-                    self.write_int(val).await?
+                    self.write_int(val).await
                 } else if let Some(val) = val.as_u64() {
-                    self.write_int(val).await?
+                    self.write_int(val).await
                 } else {
                     unreachable!()
                 }
             }
-            Value::F32(val) => self.write_f32(*val).await?,
-            Value::F64(val) => self.write_f64(*val).await?,
-            Value::String(val) => self.write_str_bytes(val.as_bytes()).await?,
-            Value::Binary(val) => self.write_bin(val).await?,
+            Value::F32(val) => self.write_f32(*val).await,
+            Value::F64(val) => self.write_f64(*val).await,
+            Value::String(val) => self.write_str_bytes(val.as_bytes()).await,
+            Value::Binary(val) => self.write_bin(val).await,
             Value::Array(a) => {
-                self.write_array_len(a.len().try_into().unwrap()).await?;
+                let mut s = self.write_array_len(a.len().try_into().unwrap()).await?;
                 for elem in a.iter() {
                     // Box future to allow recursion
-                    self.write_value(elem).boxed_local().await?;
+                    s = s.write_value(elem).boxed_local().await?;
                 }
+                Ok(s)
             }
             Value::Map(m) => {
-                self.write_map_len(m.len().try_into().unwrap()).await?;
+                let mut s = self.write_map_len(m.len().try_into().unwrap()).await?;
                 for (k, v) in m.iter() {
                     // Box future to allow recursion
-                    self.write_value(k).boxed_local().await?;
-                    self.write_value(v).boxed_local().await?;
+                    s = s.write_value(k).boxed_local().await?;
+                    s = s.write_value(v).boxed_local().await?;
                 }
+                Ok(s)
             }
-            Value::Ext(ty, bytes) => self.write_ext(bytes, *ty).await?,
+            Value::Ext(ty, bytes) => self.write_ext(bytes, *ty).await,
         }
-        Ok(())
     }
 }
 
@@ -587,11 +600,14 @@ mod tests {
     /// All three will be checked for equality.
     fn test_jig<F>(f: F)
     where
-        F: FnOnce(&mut Cursor<Vec<u8>>, &mut MsgPackSink<Cursor<Vec<u8>>>) -> Option<Value>,
+        F: FnOnce(
+            &mut Cursor<Vec<u8>>,
+            MsgPackSink<Cursor<Vec<u8>>>,
+        ) -> (Option<Value>, MsgPackSink<Cursor<Vec<u8>>>),
     {
         let mut c1 = Cursor::new(vec![0; 256]);
-        let mut msg1 = MsgPackSink::new(Cursor::new(vec![0; 256]));
-        let val = f(&mut c1, &mut msg1);
+        let msg1 = MsgPackSink::new(Cursor::new(vec![0; 256]));
+        let (val, msg1) = f(&mut c1, msg1);
 
         let b1 = c1.into_inner();
         let b2 = msg1.into_inner().into_inner();
@@ -601,7 +617,7 @@ mod tests {
         if let Some(val) = val {
             let mut msg2 = MsgPackSink::new(Cursor::new(vec![0; 256]));
             // Encode the `Value`
-            run_future(msg2.write_value(&val)).unwrap();
+            msg2 = run_future(msg2.write_value(&val)).unwrap();
             let b3 = msg2.into_inner().into_inner();
             assert_eq!(b1, b3);
         }
@@ -611,8 +627,7 @@ mod tests {
     fn nil() {
         test_jig(|c1, msg| {
             rmp::encode::write_nil(c1).unwrap();
-            run_future(msg.write_nil()).unwrap();
-            Some(Value::Nil)
+            (Some(Value::Nil), run_future(msg.write_nil()).unwrap())
         });
     }
 
@@ -620,13 +635,17 @@ mod tests {
     fn bool() {
         test_jig(|c1, msg| {
             rmp::encode::write_bool(c1, true).unwrap();
-            run_future(msg.write_bool(true)).unwrap();
-            Some(Value::Boolean(true))
+            (
+                Some(Value::Boolean(true)),
+                run_future(msg.write_bool(true)).unwrap(),
+            )
         });
         test_jig(|c1, msg| {
             rmp::encode::write_bool(c1, false).unwrap();
-            run_future(msg.write_bool(false)).unwrap();
-            Some(Value::Boolean(false))
+            (
+                Some(Value::Boolean(false)),
+                run_future(msg.write_bool(false)).unwrap(),
+            )
         });
     }
 
@@ -634,13 +653,17 @@ mod tests {
     fn float() {
         test_jig(|c1, msg| {
             rmp::encode::write_f32(c1, 1.1).unwrap();
-            run_future(msg.write_f32(1.1)).unwrap();
-            Some(Value::F32(1.1))
+            (
+                Some(Value::F32(1.1)),
+                run_future(msg.write_f32(1.1)).unwrap(),
+            )
         });
         test_jig(|c1, msg| {
             rmp::encode::write_f64(c1, 1.1).unwrap();
-            run_future(msg.write_f64(1.1)).unwrap();
-            Some(Value::F64(1.1))
+            (
+                Some(Value::F64(1.1)),
+                run_future(msg.write_f64(1.1)).unwrap(),
+            )
         });
     }
 
@@ -649,8 +672,7 @@ mod tests {
         for i in &[0, 1, 15, 16, 65535, 65536, std::u32::MAX] {
             test_jig(|c1, msg| {
                 rmp::encode::write_array_len(c1, *i).unwrap();
-                run_future(msg.write_array_len(*i)).unwrap();
-                None
+                (None, run_future(msg.write_array_len(*i)).unwrap())
             });
         }
     }
@@ -660,9 +682,9 @@ mod tests {
         test_jig(|c1, msg| {
             rmp::encode::write_array_len(c1, 1).unwrap();
             rmp::encode::write_uint(c1, 1).unwrap();
-            run_future(msg.write_array_len(1)).unwrap();
-            run_future(msg.write_int(1)).unwrap();
-            Some(Value::Array(vec![1.into()]))
+            let msg = run_future(msg.write_array_len(1)).unwrap();
+            let msg = run_future(msg.write_int(1)).unwrap();
+            (Some(Value::Array(vec![1.into()])), msg)
         })
     }
 
@@ -671,8 +693,7 @@ mod tests {
         for i in &[0, 1, 15, 16, 65535, 65536, std::u32::MAX] {
             test_jig(|c1, msg| {
                 rmp::encode::write_map_len(c1, *i).unwrap();
-                run_future(msg.write_map_len(*i)).unwrap();
-                None
+                (None, run_future(msg.write_map_len(*i)).unwrap())
             });
         }
     }
@@ -682,15 +703,16 @@ mod tests {
         for i in &[0, 1, 255, 256, 65535, 65536, std::u32::MAX] {
             test_jig(|c1, msg| {
                 rmp::encode::write_bin_len(c1, *i).unwrap();
-                run_future(msg.write_bin_len(*i)).unwrap();
-                None
+                (None, run_future(msg.write_bin_len(*i)).unwrap())
             });
         }
         test_jig(|c1, msg| {
             let buf = [1, 2, 3, 4];
             rmp::encode::write_bin(c1, &buf).unwrap();
-            run_future(msg.write_bin(&buf)).unwrap();
-            Some(Value::Binary(buf[..].into()))
+            (
+                Some(Value::Binary(buf[..].into())),
+                run_future(msg.write_bin(&buf)).unwrap(),
+            )
         });
     }
 
@@ -699,8 +721,7 @@ mod tests {
         for i in &[0, 1, 2, 4, 8, 16, 17, 255, 256, 65535, 65536, std::u32::MAX] {
             test_jig(|c1, msg| {
                 rmp::encode::write_ext_meta(c1, *i, 42).unwrap();
-                run_future(msg.write_ext_meta(*i, 42)).unwrap();
-                None
+                (None, run_future(msg.write_ext_meta(*i, 42)).unwrap())
             });
         }
     }
@@ -710,14 +731,15 @@ mod tests {
         for i in &[0, 1, 31, 32, 255, 256, 65535, 65536, std::u32::MAX] {
             test_jig(|c1, msg| {
                 rmp::encode::write_str_len(c1, *i).unwrap();
-                run_future(msg.write_str_len(*i)).unwrap();
-                None
+                (None, run_future(msg.write_str_len(*i)).unwrap())
             });
         }
         test_jig(|c1, msg| {
             rmp::encode::write_str(c1, "hello").unwrap();
-            run_future(msg.write_str("hello")).unwrap();
-            Some("hello".into())
+            (
+                Some("hello".into()),
+                run_future(msg.write_str("hello")).unwrap(),
+            )
         });
     }
 
@@ -726,8 +748,7 @@ mod tests {
         fn test_against_rmpv<V: Into<u64> + Into<EfficientInt> + Into<Value> + Copy>(val: V) {
             test_jig(|c1, msg| {
                 rmp::encode::write_uint(c1, val.into()).unwrap();
-                run_future(msg.write_int(val)).unwrap();
-                Some(val.into())
+                (Some(val.into()), run_future(msg.write_int(val)).unwrap())
             })
         }
 
@@ -769,8 +790,7 @@ mod tests {
         fn test_against_rmpv<V: Into<i64> + Into<EfficientInt> + Into<Value> + Copy>(val: V) {
             test_jig(|c1, msg| {
                 rmp::encode::write_sint(c1, val.into()).unwrap();
-                run_future(msg.write_int(val)).unwrap();
-                Some(val.into())
+                (Some(val.into()), run_future(msg.write_int(val)).unwrap())
             })
         }
 
