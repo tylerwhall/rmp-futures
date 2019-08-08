@@ -641,7 +641,7 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
         let (m, r) = m.into_value().await?;
         // This is what Box::downcast() does. Could use something like the
         // "mopa" crate. The unsafe risk is that the Boxed reader we get back
-        // from into_value() could be different than R, so `into_reader()` must
+        // from into_value() could be different than R, so `into_value()` must
         // uphold this.
         let r = unsafe {
             let raw: *mut dyn AsyncRead = Box::into_raw(r);
