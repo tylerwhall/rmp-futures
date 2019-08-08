@@ -10,6 +10,8 @@ use byteorder::{BigEndian, ByteOrder};
 use futures::io::Result as IoResult;
 use futures::prelude::*;
 
+use crate::MsgPackOption;
+
 /// The smallest representation of a uint based on its value
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EfficientInt {

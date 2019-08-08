@@ -10,6 +10,8 @@ use futures::io::ErrorKind;
 use futures::io::Result as IoResult;
 use futures::prelude::*;
 
+use crate::MsgPackOption;
+
 #[derive(Debug)]
 pub enum ValueFuture<R> {
     Nil(R),
@@ -94,23 +96,6 @@ impl<R> ValueFuture<R> {
             Some((val, r))
         } else {
             None
-        }
-    }
-}
-
-/// Used when iterating over collections, to return either the next item or
-/// indicate end of the collection, returning the underlying reader.
-pub enum MsgPackOption<T, U> {
-    Some(T),
-    End(U),
-}
-
-impl<T, U> MsgPackOption<T, U> {
-    /// Convert to an `Option`, dropping U
-    pub fn into_option(self) -> Option<T> {
-        match self {
-            MsgPackOption::Some(t) => Some(t),
-            MsgPackOption::End(_u) => None,
         }
     }
 }
