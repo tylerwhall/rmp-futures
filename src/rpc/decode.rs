@@ -109,7 +109,7 @@ impl<R: AsyncRead + Unpin> RpcResponseFuture<R> {
                 .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "array missing result field"))?
                 .decode()
                 .await
-                .map(Err)
+                .map(Ok)
         } else {
             Ok(Err(err))
         }
