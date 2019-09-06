@@ -425,7 +425,7 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     }
 
     // TODO: return map writer
-    pub async fn write_map_len(mut self, len: u32) -> IoResult<W> {
+    pub async fn write_map_len(mut self, len: u32) -> IoResult<MapFuture<W>> {
         const U16MAX: u32 = std::u16::MAX as u32;
 
         match len {
@@ -439,7 +439,10 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
                 self.write_u32(len).await
             }
         }
-        .map(|()| self.writer)
+        .map(|()| MapFuture {
+            len: len as usize,
+            writer: self.writer,
+        })
     }
 
     /// Encodes and attempts to write the most efficient binary array length
@@ -577,13 +580,8 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
                 w.write_value_dyn(a).boxed_local().await
             }
             Value::Map(m) => {
-                let mut w = self.write_map_len(m.len().try_into().unwrap()).await?;
-                for (k, v) in m.iter() {
-                    // Box future to allow recursion
-                    w = MsgPackWriter::new(w).write_value(k).boxed_local().await?;
-                    w = MsgPackWriter::new(w).write_value(v).boxed_local().await?;
-                }
-                Ok(w)
+                let w = self.write_map_len(m.len().try_into().unwrap()).await?;
+                w.write_value_dyn(m).boxed_local().await
             }
             Value::Ext(ty, bytes) => self.write_ext(bytes, *ty).await,
         }
@@ -699,6 +697,132 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
     }
 }
 
+#[derive(Debug)]
+pub struct MapFuture<W> {
+    writer: W,
+    len: usize,
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for MapFuture<W> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<IoResult<usize>> {
+        W::poll_write(Pin::new(&mut self.as_mut().writer), cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<IoResult<()>> {
+        W::poll_flush(Pin::new(&mut self.as_mut().writer), cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<IoResult<()>> {
+        W::poll_close(Pin::new(&mut self.as_mut().writer), cx)
+    }
+}
+
+impl<W: AsyncWrite + Unpin> MapFuture<W> {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn next_key(mut self) -> MsgPackOption<MsgPackWriter<MapValueFuture<W>>, W> {
+        if self.len > 0 {
+            self.len -= 1;
+            MsgPackOption::Some(MsgPackWriter::new(MapValueFuture { writer: self }))
+        } else {
+            MsgPackOption::End(self.writer)
+        }
+    }
+
+    /// If this is the last element, return a future of it's value wrapped around the
+    /// underlying writer. Avoids having to call `next()` a final time.
+    pub fn last(self) -> MsgPackOption<MsgPackWriter<W>, W> {
+        if self.len == 1 {
+            MsgPackOption::Some(MsgPackWriter::new(self.writer))
+        } else {
+            MsgPackOption::End(self.writer)
+        }
+    }
+
+    async fn write_value(self, a: &[(Value, Value)]) -> IoResult<W>
+    where
+        W: 'static,
+    {
+        let mut m = self;
+        for (k, v) in a {
+            m = m
+                .next_key()
+                .unwrap()
+                .write_value(k)
+                .await?
+                .next_value()
+                .write_value(v)
+                .await?;
+        }
+        Ok(m.next_key().unwrap_end())
+    }
+
+    /// Call write_value() after constructing a new MapFuture with the reader
+    /// converted to a boxed trait object
+    ///
+    /// This is needed to allow possible infinite recursion in an async function.
+    /// Since each level of nesting creates a new wrapper type containing the
+    /// length, it's not possible to evaluate all the possible levels of nesting
+    /// and pre-allocate the storage space, because it is infinite. Boxing the
+    /// reader on the heap at each array/map level provides for the dynamic
+    /// storage and makes the type of R (boxed trait) the same at each level of
+    /// nesting.
+    ///
+    /// Only necessary for the completely dynamic case where the decoder doesn't
+    /// know the structure of the message up front.
+    async fn write_value_dyn(self, value: &[(Value, Value)]) -> IoResult<W>
+    where
+        W: 'static,
+    {
+        let writer: Box<dyn AsyncWrite + Unpin + 'static> = Box::new(self.writer);
+        let a = MapFuture {
+            writer,
+            len: self.len,
+        };
+        let w = a.write_value(value).await?;
+        // This is what Box::downcast() does. Could use something like the
+        // "mopa" crate. The unsafe risk is that the Boxed reader we get back
+        // from into_value() could be different than R, so `write_value()` must
+        // uphold this.
+        let w = unsafe {
+            let raw: *mut dyn AsyncWrite = Box::into_raw(w);
+            Box::from_raw(raw as *mut W)
+        };
+        Ok(*w)
+    }
+}
+
+#[derive(Debug)]
+pub struct MapValueFuture<W> {
+    writer: MapFuture<W>,
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for MapValueFuture<W> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<IoResult<usize>> {
+        MapFuture::poll_write(Pin::new(&mut self.as_mut().writer), cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<IoResult<()>> {
+        MapFuture::poll_flush(Pin::new(&mut self.as_mut().writer), cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<IoResult<()>> {
+        MapFuture::poll_close(Pin::new(&mut self.as_mut().writer), cx)
+    }
+}
+
+impl<W: AsyncWrite + Unpin> MapValueFuture<W> {
+    pub fn next_value(self) -> MsgPackWriter<MapFuture<W>> {
+        MsgPackWriter::new(self.writer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -811,7 +935,7 @@ mod tests {
         for i in &[0, 1, 15, 16, 65535, 65536, std::u32::MAX] {
             test_jig(|c1, msg| {
                 rmp::encode::write_map_len(c1, *i).unwrap();
-                (None, run_future(msg.write_map_len(*i)).unwrap())
+                (None, run_future(msg.write_map_len(*i)).unwrap().writer)
             });
         }
     }
