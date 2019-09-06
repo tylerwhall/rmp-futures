@@ -933,6 +933,23 @@ mod tests {
     }
 
     #[test]
+    fn map() {
+        test_jig(|c1, msg| {
+            rmp::encode::write_map_len(c1, 1).unwrap();
+            rmp::encode::write_uint(c1, 1).unwrap();
+            rmp::encode::write_uint(c1, 2).unwrap();
+            let f = msg
+                .write_map_len(1)
+                .and_then(|m| m.next_key().unwrap().write_int(1))
+                .and_then(|m| m.next_value().write_int(2));
+            (
+                Some(Value::Map(vec![(1.into(), 2.into())])),
+                run_future(f).unwrap().next_key().unwrap_end(),
+            )
+        })
+    }
+
+    #[test]
     fn bin() {
         for i in &[0, 1, 255, 256, 65535, 65536, std::u32::MAX] {
             test_jig(|c1, msg| {
