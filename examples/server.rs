@@ -1,7 +1,6 @@
 #![feature(async_await)]
 
 use futures::executor::{block_on, ThreadPool};
-use futures::future::TryFutureExt;
 use futures::io::AsyncRead;
 use futures::io::AsyncReadExt;
 use futures::io::AsyncWrite;
@@ -12,7 +11,7 @@ use romio::{TcpListener, TcpStream};
 use std::io;
 use std::sync::Arc;
 
-use rmp_futures::encode::MsgPackSink;
+use rmp_futures::encode::MsgPackWriter;
 use rmp_futures::rpc::decode::RpcMessage;
 use rmp_futures::rpc::decode::RpcParamsFuture;
 use rmp_futures::rpc::decode::RpcStream;
@@ -43,16 +42,34 @@ where
     t.spawn(async move {
         let mut w = w.lock().await;
         let writer = w.take().unwrap();
-        let sink = MsgPackSink::new(writer);
+        let sink = MsgPackWriter::new(writer);
         let resp = "Hello there ".to_owned() + &param1;
         w.replace(
             sink.write_array_len(4)
-                .and_then(|w| MsgPackSink::new(w).write_int(1))
-                .and_then(|w| MsgPackSink::new(w).write_int(id))
-                .and_then(|w| MsgPackSink::new(w).write_nil())
-                .and_then(|w| MsgPackSink::new(w).write_str(&resp))
                 .await
-                .unwrap(),
+                .unwrap()
+                .next()
+                .unwrap()
+                .write_int(1)
+                .await
+                .unwrap()
+                .next()
+                .unwrap()
+                .write_int(id)
+                .await
+                .unwrap()
+                .next()
+                .unwrap()
+                .write_nil()
+                .await
+                .unwrap()
+                .next()
+                .unwrap()
+                .write_str(&resp)
+                .await
+                .unwrap()
+                .next()
+                .unwrap_end(),
         );
         println!("got hello with id={} param={}", id, param1);
     })

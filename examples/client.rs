@@ -1,11 +1,10 @@
 #![feature(async_await)]
 
 use futures::executor::block_on;
-use futures::future::TryFutureExt;
 use romio::TcpStream;
 use std::io;
 
-use rmp_futures::encode::MsgPackSink;
+use rmp_futures::encode::MsgPackWriter;
 use rmp_futures::rpc::decode::RpcMessage;
 use rmp_futures::rpc::decode::RpcStream;
 
@@ -14,16 +13,35 @@ fn main() -> io::Result<()> {
         let addr = "127.0.0.1:12345".parse().unwrap();
         let socket = TcpStream::connect(&addr).await?;
 
-        let sink = MsgPackSink::new(socket);
-        let socket = sink
+        let sink = MsgPackWriter::new(socket);
+        let args = sink
             .write_array_len(4)
-            .and_then(|w| MsgPackSink::new(w).write_int(0))
-            .and_then(|w| MsgPackSink::new(w).write_int(1))
-            .and_then(|w| MsgPackSink::new(w).write_str("hello"))
-            .and_then(|w| MsgPackSink::new(w).write_array_len(1))
-            .and_then(|w| MsgPackSink::new(w).write_str("Bob"))
-            .await
+            .await?
+            .next()
+            .unwrap()
+            .write_int(0)
+            .await?
+            .next()
+            .unwrap()
+            .write_int(1)
+            .await?
+            .next()
+            .unwrap()
+            .write_str("hello")
+            .await?
+            .next()
             .unwrap();
+        let socket = args
+            .write_array_len(1)
+            .await?
+            .next()
+            .unwrap()
+            .write_str("Bob")
+            .await?
+            .next()
+            .unwrap_end()
+            .next()
+            .unwrap_end();
 
         let stream = RpcStream::new(socket);
         match stream.next().await? {
