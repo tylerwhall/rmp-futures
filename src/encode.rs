@@ -826,7 +826,6 @@ impl<W: AsyncWrite + Unpin> MapValueFuture<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
     fn run_future<R>(f: impl Future<Output = R>) -> R {
         futures::executor::LocalPool::new().run_until(f)
@@ -838,26 +837,19 @@ mod tests {
     /// All three will be checked for equality.
     fn test_jig<F>(f: F)
     where
-        F: FnOnce(
-            &mut Cursor<Vec<u8>>,
-            MsgPackWriter<Cursor<Vec<u8>>>,
-        ) -> (Option<Value>, Cursor<Vec<u8>>),
+        F: FnOnce(&mut Vec<u8>, MsgPackWriter<Vec<u8>>) -> (Option<Value>, Vec<u8>),
     {
-        let mut c1 = Cursor::new(vec![0; 256]);
-        let msg1 = MsgPackWriter::new(Cursor::new(vec![0; 256]));
-        let (val, msg1) = f(&mut c1, msg1);
+        let mut v1 = Vec::new();
+        let msg2 = MsgPackWriter::new(Vec::new());
+        let (val, v2) = f(&mut v1, msg2);
 
-        let b1 = c1.into_inner();
-        let b2 = msg1.into_inner();
-
-        assert_eq!(b1, b2);
+        assert_eq!(v1, v2);
 
         if let Some(val) = val {
-            let msg2 = MsgPackWriter::new(Cursor::new(vec![0; 256]));
+            let msg2 = MsgPackWriter::new(Vec::new());
             // Encode the `Value`
-            let msg2 = run_future(msg2.write_value(&val)).unwrap();
-            let b3 = msg2.into_inner();
-            assert_eq!(b1, b3);
+            let v3 = run_future(msg2.write_value(&val)).unwrap();
+            assert_eq!(v1, v3);
         }
     }
 
