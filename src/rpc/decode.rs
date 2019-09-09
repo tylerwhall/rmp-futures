@@ -6,7 +6,9 @@ use futures::io::Error as IoError;
 use futures::io::ErrorKind;
 use futures::io::Result as IoResult;
 use futures::prelude::*;
+use num_traits::FromPrimitive;
 
+use super::*;
 use crate::decode::{ArrayFuture, MsgPackFuture, StringFuture, ValueFuture};
 
 pub enum RpcMessage<R> {
@@ -16,11 +18,11 @@ pub enum RpcMessage<R> {
 }
 
 impl<R> RpcMessage<R> {
-    fn request(array: ArrayFuture<R>, id: u32) -> Self {
+    fn request(id: u32, array: ArrayFuture<R>) -> Self {
         RpcMessage::Request(RpcRequestFuture { array, id })
     }
 
-    fn response(array: ArrayFuture<R>, id: u32) -> Self {
+    fn response(id: u32, array: ArrayFuture<R>) -> Self {
         RpcMessage::Response(RpcResponseFuture { array, id })
     }
 }
@@ -145,6 +147,24 @@ impl<R: AsyncRead + Unpin> RpcStream<R> {
         RpcStream { reader }
     }
 
+    /// Helper used for request and response to read the msgid field
+    async fn decode_msgid<R2: AsyncRead + Unpin>(
+        array: ArrayFuture<R2>,
+    ) -> IoResult<(u32, ArrayFuture<R2>)> {
+        let msgid = array
+            .next()
+            .into_option()
+            .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "msgpack array 0-length"))?;
+        let (msgid, array) = msgid
+            .decode()
+            .await?
+            .into_u64()
+            .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "msgid not int"))?;
+        let msgid = u32::try_from(msgid)
+            .map_err(|_| IoError::new(ErrorKind::InvalidData, "msgid out of range"))?;
+        Ok((msgid, array))
+    }
+
     pub async fn next(self) -> IoResult<RpcMessage<RpcStream<R>>> {
         // First, wrap our MsgPackFuture in another instance of RpcStream. Once
         // this message is fully consumed and the underlying reader is returned,
@@ -165,29 +185,19 @@ impl<R: AsyncRead + Unpin> RpcStream<R> {
             .await?
             .into_u64()
             .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "msgtype not int"))?;
-        match ty {
-            0 | 1 => {
-                // Request or Response
-                let msgid = array.next().into_option().ok_or_else(|| {
-                    IoError::new(ErrorKind::InvalidData, "msgpack array 0-length")
-                })?;
-                let (msgid, array) = msgid
-                    .decode()
-                    .await?
-                    .into_u64()
-                    .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "msgid not int"))?;
-                let msgid = u32::try_from(msgid)
-                    .map_err(|_| IoError::new(ErrorKind::InvalidData, "msgid out of range"))?;
-                match ty {
-                    0 => Ok(RpcMessage::request(array, msgid)),
-                    _ => Ok(RpcMessage::response(array, msgid)),
-                }
-            }
-            2 => {
+
+        match MsgType::from_u64(ty) {
+            Some(MsgType::Request) => Self::decode_msgid(array)
+                .await
+                .map(|(msgid, array)| RpcMessage::request(msgid, array)),
+            Some(MsgType::Response) => Self::decode_msgid(array)
+                .await
+                .map(|(msgid, array)| RpcMessage::response(msgid, array)),
+            Some(MsgType::Notification) => {
                 // Notify
                 unimplemented!()
             }
-            ty => Err(IoError::new(
+            None => Err(IoError::new(
                 ErrorKind::InvalidData,
                 format!("invalid msgtype {}", ty),
             )),
