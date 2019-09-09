@@ -4,46 +4,20 @@ use futures::executor::block_on;
 use romio::TcpStream;
 use std::io;
 
-use rmp_futures::encode::MsgPackWriter;
 use rmp_futures::rpc::decode::RpcMessage;
 use rmp_futures::rpc::decode::RpcStream;
+use rmp_futures::rpc::encode::RpcSink;
 
 fn main() -> io::Result<()> {
     block_on(async {
         let addr = "127.0.0.1:12345".parse().unwrap();
         let socket = TcpStream::connect(&addr).await?;
 
-        let sink = MsgPackWriter::new(socket);
-        let args = sink
-            .write_array_len(4)
-            .await?
-            .next()
-            .unwrap()
-            .write_int(0)
-            .await?
-            .next()
-            .unwrap()
-            .write_int(1)
-            .await?
-            .next()
-            .unwrap()
-            .write_str("hello")
-            .await?
-            .next()
-            .unwrap();
-        let socket = args
-            .write_array_len(1)
-            .await?
-            .next()
-            .unwrap()
-            .write_str("Bob")
-            .await?
-            .next()
-            .unwrap_end()
-            .next()
-            .unwrap_end();
+        let sink = RpcSink::new(socket);
+        let args = sink.write_request(1.into(), "hello", 1).await?;
+        let sink = args.last().unwrap().write_str("Bob").await?;
 
-        let stream = RpcStream::new(socket);
+        let stream = RpcStream::new(sink.into_inner());
         match stream.next().await? {
             RpcMessage::Response(resp) => {
                 let id = resp.id();

@@ -166,11 +166,11 @@ impl<R: AsyncRead + Unpin> RpcStream<R> {
     }
 
     pub async fn next(self) -> IoResult<RpcMessage<RpcStream<R>>> {
-        // First, wrap our MsgPackFuture in another instance of RpcStream. Once
-        // this message is fully consumed and the underlying reader is returned,
-        // the client will be left with this new inner instance of RpcStream
-        // pointing at the next message.
-        let msg = MsgPackFuture::new(RpcStream::new(self.reader));
+        // First, wrap our RpcStream in a MsgPackFuture rather than using the
+        // underlying reader. When this message is fully consumed and its reader
+        // is returned, the client will be left with this RpcStream pointing at
+        // the next message.
+        let msg = MsgPackFuture::new(self);
         let a = msg
             .decode()
             .await?
