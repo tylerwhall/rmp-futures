@@ -18,22 +18,22 @@ pub enum RpcMessage<R> {
 }
 
 impl<R> RpcMessage<R> {
-    fn request(id: u32, array: ArrayFuture<R>) -> Self {
+    fn request(id: MsgId, array: ArrayFuture<R>) -> Self {
         RpcMessage::Request(RpcRequestFuture { array, id })
     }
 
-    fn response(id: u32, array: ArrayFuture<R>) -> Self {
+    fn response(id: MsgId, array: ArrayFuture<R>) -> Self {
         RpcMessage::Response(RpcResponseFuture { array, id })
     }
 }
 
 pub struct RpcRequestFuture<R> {
     array: ArrayFuture<R>,
-    id: u32,
+    id: MsgId,
 }
 
 impl<R: AsyncRead + Unpin> RpcRequestFuture<R> {
-    pub fn id(&self) -> u32 {
+    pub fn id(&self) -> MsgId {
         self.id
     }
 
@@ -83,11 +83,11 @@ impl<R: AsyncRead + Unpin> AsyncRead for RpcParamsFuture<R> {
 
 pub struct RpcResponseFuture<R> {
     array: ArrayFuture<R>,
-    id: u32,
+    id: MsgId,
 }
 
 impl<R: AsyncRead + Unpin> RpcResponseFuture<R> {
-    pub fn id(&self) -> u32 {
+    pub fn id(&self) -> MsgId {
         self.id
     }
 
@@ -150,7 +150,7 @@ impl<R: AsyncRead + Unpin> RpcStream<R> {
     /// Helper used for request and response to read the msgid field
     async fn decode_msgid<R2: AsyncRead + Unpin>(
         array: ArrayFuture<R2>,
-    ) -> IoResult<(u32, ArrayFuture<R2>)> {
+    ) -> IoResult<(MsgId, ArrayFuture<R2>)> {
         let msgid = array
             .next()
             .into_option()
@@ -162,7 +162,7 @@ impl<R: AsyncRead + Unpin> RpcStream<R> {
             .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "msgid not int"))?;
         let msgid = u32::try_from(msgid)
             .map_err(|_| IoError::new(ErrorKind::InvalidData, "msgid out of range"))?;
-        Ok((msgid, array))
+        Ok((MsgId(msgid), array))
     }
 
     pub async fn next(self) -> IoResult<RpcMessage<RpcStream<R>>> {
@@ -244,7 +244,7 @@ mod test {
         async fn read_message<R: AsyncRead + Unpin>(stream: RpcStream<R>) -> IoResult<()> {
             let stream = match stream.next().await? {
                 RpcMessage::Request(req) => {
-                    assert_eq!(req.id(), 1);
+                    assert_eq!(req.id(), 1.into());
                     let method: StringFuture<_> = req.method().await?;
                     let (method, params) = method.into_string().await?;
                     assert_eq!(method, "summon");
@@ -280,7 +280,7 @@ mod test {
             };
             let _stream = match stream.next().await? {
                 RpcMessage::Request(req) => {
-                    assert_eq!(req.id(), 2);
+                    assert_eq!(req.id(), 2.into());
                     let method: StringFuture<_> = req.method().await?;
                     let (method, params) = method.into_string().await?;
                     assert_eq!(method, "floop");

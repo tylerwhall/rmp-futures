@@ -51,11 +51,11 @@ fn main() -> io::Result<()> {
                 match result {
                     Ok(vf) => {
                         let (s, _stream) = vf.into_string().unwrap().into_string().await?;
-                        println!("got good response id={} s={:?}", id, s);
+                        println!("got good response id={:?} s={:?}", id, s);
                     }
                     Err(vf) => {
                         let (s, _stream) = vf.into_string().unwrap().into_string().await?;
-                        println!("got bad response id={} s={:?}", id, s);
+                        println!("got bad response id={:?} s={:?}", id, s);
                     }
                 }
             }

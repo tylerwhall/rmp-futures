@@ -15,9 +15,10 @@ use rmp_futures::encode::MsgPackWriter;
 use rmp_futures::rpc::decode::RpcMessage;
 use rmp_futures::rpc::decode::RpcParamsFuture;
 use rmp_futures::rpc::decode::RpcStream;
+use rmp_futures::rpc::MsgId;
 
 async fn hello_handler<W, R>(
-    id: u32,
+    id: MsgId,
     w: Arc<Mutex<Option<W>>>,
     params: RpcParamsFuture<R>,
     mut t: &ThreadPool,
@@ -55,7 +56,7 @@ where
                 .unwrap()
                 .next()
                 .unwrap()
-                .write_int(id)
+                .write_int(u32::from(id))
                 .await
                 .unwrap()
                 .next()
@@ -71,7 +72,7 @@ where
                 .next()
                 .unwrap_end(),
         );
-        println!("got hello with id={} param={}", id, param1);
+        println!("got hello with id={:?} param={}", id, param1);
     })
     .unwrap();
     reader
