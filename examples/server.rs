@@ -11,10 +11,10 @@ use romio::{TcpListener, TcpStream};
 use std::io;
 use std::sync::Arc;
 
-use rmp_futures::encode::MsgPackWriter;
 use rmp_futures::rpc::decode::RpcMessage;
 use rmp_futures::rpc::decode::RpcParamsFuture;
 use rmp_futures::rpc::decode::RpcStream;
+use rmp_futures::rpc::encode::RpcSink;
 use rmp_futures::rpc::MsgId;
 
 async fn hello_handler<W, R>(
@@ -30,7 +30,6 @@ where
     let params = params.params().await.unwrap();
     let (param1, reader) = params
         .last()
-        .into_option()
         .unwrap()
         .decode()
         .await
@@ -43,34 +42,13 @@ where
     t.spawn(async move {
         let mut w = w.lock().await;
         let writer = w.take().unwrap();
-        let sink = MsgPackWriter::new(writer);
+        let sink = RpcSink::new(writer);
         let resp = "Hello there ".to_owned() + &param1;
         w.replace(
-            sink.write_array_len(4)
+            sink.write_ok_response(id, |rsp| rsp.write_str(&resp))
                 .await
                 .unwrap()
-                .next()
-                .unwrap()
-                .write_int(1)
-                .await
-                .unwrap()
-                .next()
-                .unwrap()
-                .write_int(u32::from(id))
-                .await
-                .unwrap()
-                .next()
-                .unwrap()
-                .write_nil()
-                .await
-                .unwrap()
-                .next()
-                .unwrap()
-                .write_str(&resp)
-                .await
-                .unwrap()
-                .next()
-                .unwrap_end(),
+                .into_inner(),
         );
         println!("got hello with id={:?} param={}", id, param1);
     })
