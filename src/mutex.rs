@@ -76,7 +76,7 @@ impl<T> Mutex<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use futures::lock::Mutex;
     ///
     /// let mutex = Mutex::new(0);
@@ -118,7 +118,7 @@ impl<T: ?Sized> Mutex<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// # futures::executor::block_on(async {
     /// use futures::lock::Mutex;
     ///
