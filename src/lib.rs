@@ -7,6 +7,7 @@ extern crate enum_primitive_derive;
 
 pub mod decode;
 pub mod encode;
+mod mutex;
 pub mod rpc;
 
 /// Used when iterating over collections, to return either the next item or
