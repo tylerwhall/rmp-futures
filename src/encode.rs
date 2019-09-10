@@ -631,23 +631,45 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
         self.len == 0
     }
 
-    pub fn next(mut self) -> MsgPackOption<MsgPackWriter<Self>, W> {
-        if self.len > 0 {
-            self.len -= 1;
-            MsgPackOption::Some(MsgPackWriter::new(self))
-        } else {
-            MsgPackOption::End(self.writer)
-        }
+    /// Return the underlying writer from this `ArrayFuture` that has already
+    /// written all elements (len == 0).
+    ///
+    /// #Panics
+    ///
+    /// Panics if self.is_empty() is false. `next()` must have been called as
+    /// many times as the array length originally written before calling this to
+    /// destroy the array wrapper.
+    pub fn end(self) -> W {
+        assert!(self.is_empty());
+        self.writer
     }
 
-    /// If this is the last element, return a future of it's value wrapped around the
-    /// underlying writer. Avoids having to call `next()` a final time.
-    pub fn last(self) -> MsgPackOption<MsgPackWriter<W>, W> {
-        if self.len == 1 {
-            MsgPackOption::Some(MsgPackWriter::new(self.writer))
-        } else {
-            MsgPackOption::End(self.writer)
-        }
+    /// Return a `MsgPackWriter` for the next array element
+    ///
+    /// #Panics
+    ///
+    /// Panics if self.is_empty() is true. `next()` must be called no more times
+    /// than the array length originally written.
+    pub fn next(mut self) -> MsgPackWriter<Self> {
+        assert!(!self.is_empty());
+        self.len -= 1;
+        MsgPackWriter::new(self)
+    }
+
+    /// If there is one element left, return a `MsgPackWriter` for the last array
+    /// element.
+    ///
+    /// This will yield the underlying writer when the element is written. This
+    /// avoids have to also call `end()` after writing this element.
+    ///
+    /// #Panics
+    ///
+    /// Panics if self.len() != 1. `next()` must have been called as many times
+    /// as the array length originally written - 1 before calling this to destroy
+    /// the array wrapper.
+    pub fn last(self) -> MsgPackWriter<W> {
+        assert_eq!(self.len(), 1);
+        MsgPackWriter::new(self.writer)
     }
 
     async fn write_value(self, a: &[Value]) -> IoResult<W>
@@ -656,10 +678,10 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
     {
         let mut aw = self;
         for elem in a {
-            let m = aw.next().into_option().unwrap();
+            let m = aw.next();
             aw = m.write_value(elem).await?;
         }
-        Ok(aw.next().unwrap_end())
+        Ok(aw.end())
     }
 
     /// Call write_value() after constructing a new ArrayFuture with the reader
@@ -912,13 +934,8 @@ mod tests {
         test_jig(|c1, msg| {
             rmp::encode::write_array_len(c1, 1).unwrap();
             rmp::encode::write_uint(c1, 1).unwrap();
-            let f = msg
-                .write_array_len(1)
-                .and_then(|a| a.next().unwrap().write_int(1));
-            (
-                Some(Value::Array(vec![1.into()])),
-                run_future(f).unwrap().next().unwrap_end(),
-            )
+            let f = msg.write_array_len(1).and_then(|a| a.last().write_int(1));
+            (Some(Value::Array(vec![1.into()])), run_future(f).unwrap())
         })
     }
 

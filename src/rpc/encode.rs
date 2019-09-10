@@ -49,19 +49,15 @@ impl<W: AsyncWrite + Unpin> RpcSink<W> {
             .write_array_len(4)
             .await?
             .next()
-            .unwrap()
             .write_int(MsgType::Request)
             .await?
             .next()
-            .unwrap()
             .write_int(msgid)
             .await?
             .next()
-            .unwrap()
             .write_str(method.as_ref())
             .await?
-            .last()
-            .unwrap();
+            .last();
         args.write_array_len(num_args).await
     }
 
@@ -74,19 +70,15 @@ impl<W: AsyncWrite + Unpin> RpcSink<W> {
             .write_array_len(4)
             .await?
             .next()
-            .unwrap()
             .write_int(MsgType::Response)
             .await?
             .next()
-            .unwrap()
             .write_int(msgid)
             .await?
             .next()
-            .unwrap()
             .write_nil()
             .await?
-            .last()
-            .unwrap();
+            .last();
         write_ok(rsp).await
     }
 
@@ -103,17 +95,14 @@ impl<W: AsyncWrite + Unpin> RpcSink<W> {
             .write_array_len(4)
             .await?
             .next()
-            .unwrap()
             .write_int(MsgType::Response)
             .await?
             .next()
-            .unwrap()
             .write_int(msgid)
             .await?
-            .next()
-            .unwrap();
+            .next();
         let ok = write_err(err).await?;
-        ok.last().unwrap().write_nil().await
+        ok.last().write_nil().await
     }
 }
 
@@ -125,7 +114,6 @@ fn write_request_response() {
             .await
             .unwrap()
             .last()
-            .unwrap()
             .write_int(42)
             .await
             .unwrap()

@@ -15,7 +15,7 @@ fn main() -> io::Result<()> {
 
         let sink = RpcSink::new(socket);
         let args = sink.write_request(1.into(), "hello", 1).await?;
-        let sink = args.last().unwrap().write_str("Bob").await?;
+        let sink = args.last().write_str("Bob").await?;
 
         let stream = RpcStream::new(sink.into_inner());
         match stream.next().await? {
