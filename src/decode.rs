@@ -12,6 +12,17 @@ use futures::prelude::*;
 
 use crate::MsgPackOption;
 
+pub(crate) trait WrapReader<R, R2> {
+    type Output;
+
+    /// Convert the underlying reader into some other type that implements read.
+    ///
+    /// Intended for wrapping the reader to control what the client gets back
+    /// after consuming this message. Can be used to make sure cleanup actions
+    /// happen.
+    fn wrap(self, wrap: impl FnOnce(R) -> R2) -> Self::Output;
+}
+
 #[derive(Debug)]
 pub enum ValueFuture<R> {
     Nil(R),
@@ -24,6 +35,25 @@ pub enum ValueFuture<R> {
     Bin(BinFuture<R>),
     String(StringFuture<R>),
     Ext(ExtFuture<R>),
+}
+
+impl<R, R2> WrapReader<R, R2> for ValueFuture<R> {
+    type Output = ValueFuture<R2>;
+
+    fn wrap(self, wrap: impl FnOnce(R) -> R2) -> Self::Output {
+        match self {
+            ValueFuture::Nil(r) => ValueFuture::Nil(wrap(r)),
+            ValueFuture::Boolean(v, r) => ValueFuture::Boolean(v, wrap(r)),
+            ValueFuture::Integer(v, r) => ValueFuture::Integer(v, wrap(r)),
+            ValueFuture::F32(v, r) => ValueFuture::F32(v, wrap(r)),
+            ValueFuture::F64(v, r) => ValueFuture::F64(v, wrap(r)),
+            ValueFuture::Array(v) => ValueFuture::Array(v.wrap(wrap)),
+            ValueFuture::Map(v) => ValueFuture::Map(v.wrap(wrap)),
+            ValueFuture::Bin(v) => ValueFuture::Bin(v.wrap(wrap)),
+            ValueFuture::String(v) => ValueFuture::String(v.wrap(wrap)),
+            ValueFuture::Ext(v) => ValueFuture::Ext(v.wrap(wrap)),
+        }
+    }
 }
 
 impl<R> ValueFuture<R> {
@@ -430,6 +460,17 @@ impl<R: AsyncRead + Unpin> AsyncRead for ArrayFuture<R> {
     }
 }
 
+impl<R, R2> WrapReader<R, R2> for ArrayFuture<R> {
+    type Output = ArrayFuture<R2>;
+
+    fn wrap(self, wrap: impl FnOnce(R) -> R2) -> Self::Output {
+        ArrayFuture {
+            reader: wrap(self.reader),
+            len: self.len,
+        }
+    }
+}
+
 impl<R: AsyncRead + Unpin> ArrayFuture<R> {
     pub fn len(&self) -> usize {
         self.len
@@ -578,6 +619,17 @@ impl<R: AsyncRead + Unpin> AsyncRead for MapFuture<R> {
     }
 }
 
+impl<R, R2> WrapReader<R, R2> for MapFuture<R> {
+    type Output = MapFuture<R2>;
+
+    fn wrap(self, wrap: impl FnOnce(R) -> R2) -> Self::Output {
+        MapFuture {
+            reader: wrap(self.reader),
+            len: self.len,
+        }
+    }
+}
+
 impl<R: AsyncRead + Unpin> MapFuture<R> {
     pub fn len(&self) -> usize {
         self.len
@@ -720,6 +772,17 @@ pub struct BinFuture<R> {
     len: usize,
 }
 
+impl<R, R2> WrapReader<R, R2> for BinFuture<R> {
+    type Output = BinFuture<R2>;
+
+    fn wrap(self, wrap: impl FnOnce(R) -> R2) -> Self::Output {
+        BinFuture {
+            reader: wrap(self.reader),
+            len: self.len,
+        }
+    }
+}
+
 impl<R: AsyncRead + Unpin> BinFuture<R> {
     pub fn len(&self) -> usize {
         self.len
@@ -763,6 +826,14 @@ impl<R: AsyncRead + Unpin> BinFuture<R> {
 #[derive(Debug)]
 pub struct StringFuture<R>(BinFuture<R>);
 
+impl<R, R2> WrapReader<R, R2> for StringFuture<R> {
+    type Output = StringFuture<R2>;
+
+    fn wrap(self, wrap: impl FnOnce(R) -> R2) -> Self::Output {
+        StringFuture(self.0.wrap(wrap))
+    }
+}
+
 impl<R: AsyncRead + Unpin> StringFuture<R> {
     pub async fn into_string(self) -> IoResult<(String, R)> {
         self.0.into_vec().await.and_then(|(v, r)| {
@@ -805,6 +876,17 @@ impl<R> DerefMut for StringFuture<R> {
 pub struct ExtFuture<R> {
     bin: BinFuture<R>,
     ty: i8,
+}
+
+impl<R, R2> WrapReader<R, R2> for ExtFuture<R> {
+    type Output = ExtFuture<R2>;
+
+    fn wrap(self, wrap: impl FnOnce(R) -> R2) -> Self::Output {
+        ExtFuture {
+            bin: self.bin.wrap(wrap),
+            ty: self.ty,
+        }
+    }
 }
 
 impl<R: AsyncRead + Unpin> ExtFuture<R> {
