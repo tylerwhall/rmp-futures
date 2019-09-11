@@ -1,5 +1,7 @@
 pub mod decode;
 pub mod encode;
+pub mod shared_reader;
+pub mod shared_writer;
 
 use crate::encode::EfficientInt;
 

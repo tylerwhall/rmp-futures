@@ -27,6 +27,16 @@ pub enum ValueFuture<R> {
 }
 
 impl<R> ValueFuture<R> {
+    /// Convert the underlying reader into some other type that implements read.
+    ///
+    /// Intended for wrapping the reader to control what the client gets back
+    /// after consuming this message. Can be used to make sure cleanup actions
+    /// happen.
+    pub fn wrap<R2: AsyncRead + Unpin>(self, wrap: impl FnOnce(R) -> R2) -> ValueFuture<R2> {
+        unimplemented!()
+        //MsgPackFuture::new(wrap(self.into_inner()))
+    }
+
     pub fn into_bool(self) -> Option<(bool, R)> {
         if let ValueFuture::Boolean(val, r) = self {
             Some((val, r))

@@ -116,6 +116,11 @@ impl<R: AsyncRead + Unpin> RpcResponseFuture<R> {
             Ok(Err(err))
         }
     }
+
+    /// Consume this message and return the underlying reader
+    pub fn skip(self) -> impl Future<Output = IoResult<R>> {
+        self.array.skip()
+    }
 }
 
 /// Container that ensures the response message array is consumed before
