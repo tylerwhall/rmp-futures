@@ -1,7 +1,9 @@
 pub mod decode;
 pub mod encode;
-pub mod shared_reader;
+mod shared_reader;
 pub mod shared_writer;
+
+pub use shared_reader::{RequestDispatch, RpcIncomingMessage};
 
 use crate::encode::EfficientInt;
 

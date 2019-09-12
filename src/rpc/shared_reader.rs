@@ -7,15 +7,15 @@ use futures::channel::oneshot::{channel, Receiver, Sender};
 use futures::io::Result as IoResult;
 use futures::prelude::*;
 
-use super::decode::{RpcMessage, RpcRequestFuture, RpcStream};
+use super::decode::{RpcMessage, RpcRequestFuture, RpcResponseFuture, RpcStream};
 use super::MsgId;
 use crate::decode::ValueFuture;
 
 use slab::Slab;
 use spin::Mutex as SpinMutex;
 
-type ResponseSender<R> = Sender<SentResult<R>>;
-type ResponseReceiver<R> = Receiver<SentResult<R>>;
+pub type ResponseSender<R> = Sender<SentResult<R>>;
+pub type ResponseReceiver<R> = Receiver<SentResult<R>>;
 
 /// Tracks outstanding requests.
 ///
@@ -23,12 +23,18 @@ type ResponseReceiver<R> = Receiver<SentResult<R>>;
 /// guaranteeing they are unique. The item in the slab is a channel to send
 /// ownership of the reader to the sender of the request. It also contains a
 /// channel to send ownership back when the response has been read.
-struct Requests<R>(SpinMutex<Slab<ResponseSender<R>>>);
+pub struct RequestDispatch<R>(SpinMutex<Slab<ResponseSender<R>>>);
 
-impl<R> Requests<R> {
+impl<R> RequestDispatch<R> {
+    pub fn new() -> Self {
+        // Start with 0 capacity in the slab to use no memory if this is used as
+        // a server only
+        RequestDispatch(SpinMutex::new(Slab::new()))
+    }
+
     /// Allocate a new pending request. Returns the request id and a future to
     /// receive the response.
-    fn new_request(&self) -> (MsgId, ResponseReceiver<R>) {
+    pub fn new_request(&self) -> (MsgId, ResponseReceiver<R>) {
         let (sender, receiver) = channel();
         let key = self.0.lock().insert(sender);
         // request ids are supposed to be 32-bit. On a 64-bit machine, there
@@ -49,6 +55,77 @@ impl<R> Requests<R> {
     }
 }
 
+impl<R: AsyncRead + Unpin> RequestDispatch<R> {
+    pub async fn dispatch_one(
+        &self,
+        rsp: RpcResponseFuture<RpcStream<R>>,
+    ) -> IoResult<RpcStream<R>> {
+        let id = rsp.id();
+        if let Some(sender) = self.remove(id) {
+            // Decode the message to get an Ok/Err result
+            let result = rsp.result().await?;
+            let (result, receiver) = RpcResultFuture::from_result(result);
+            if let Err(_r) = sender.send(result) {
+                println!("Got unsolicitied response {:?} (receiver dead)", id);
+                // If the receiver was dropped, we get the
+                // result back. Dropping it here will
+                // complete our receiver just as if the
+                // client code received it and dropped it.
+            }
+            // oneshot::Canceled should not be possible
+            // because drop on RpcResultFuture always sends
+            // to the sender before the sender is dropped.
+            let result = receiver.await.expect("reader not returned");
+            // Consume the rest of the message if the client did not
+            unimplemented!()//result.finish().await
+        } else {
+            // TODO: error! from log crate
+            println!("Got unsolicitied response {:?}", id);
+            // Consume this message and loop
+            unimplemented!()//rsp.skip().await
+        }
+    }
+
+    pub async fn dispatch(&self, mut stream: RpcStream<R>) -> IoResult<()> {
+        loop {
+            stream = match stream.next().await? {
+                RpcMessage::Request(req) => {
+                    unimplemented!()
+                    /*
+                    req.method()
+                        .await?
+                        .skip()
+                        .await?
+                        .params()
+                        .await?
+                        .skip()
+                        .await?
+                        */
+                }
+                RpcMessage::Notify => unimplemented!(),
+                RpcMessage::Response(rsp) => self.dispatch_one(rsp).await?,
+            }
+        }
+    }
+
+    pub async fn next(
+        &self,
+        mut stream: RpcStream<R>,
+    ) -> IoResult<RpcIncomingMessage<RpcStream<R>>> {
+        loop {
+            stream = match stream.next().await? {
+                RpcMessage::Request(req) => {
+                    return Ok(RpcIncomingMessage::Request(req));
+                }
+                RpcMessage::Notify => {
+                    return Ok(RpcIncomingMessage::Notify);
+                }
+                RpcMessage::Response(rsp) => self.dispatch_one(rsp).await?,
+            }
+        }
+    }
+}
+
 type SentValueFuture<R> = ValueFuture<RpcResultFuture<R>>;
 /// What we send to the client waiting on a method result
 type SentResult<R> = Result<SentValueFuture<R>, SentValueFuture<R>>;
@@ -60,7 +137,7 @@ struct RpcResultFutureInner<R> {
     sender: Sender<super::decode::RpcResultFuture<RpcStream<R>>>,
 }
 
-struct RpcResultFuture<R>(Option<RpcResultFutureInner<R>>);
+pub struct RpcResultFuture<R>(Option<RpcResultFutureInner<R>>);
 
 impl<R: AsyncRead + Unpin> RpcResultFuture<R> {
     fn new(
@@ -123,68 +200,55 @@ pub enum RpcIncomingMessage<R> {
     Notify,
 }
 
-enum ReaderState<R> {
-    Owned(RpcStream<R>),
-    Busy,
-}
-
-impl<R> ReaderState<R> {
-    fn take(&mut self) -> Self {
-        std::mem::replace(self, ReaderState::Busy)
-    }
-}
-
 pub struct SharedReader<R> {
-    requests: Arc<Requests<R>>,
-    state: ReaderState<R>,
+    requests: Arc<RequestDispatch<R>>,
 }
 
 impl<R: AsyncRead + Unpin> SharedReader<R> {
-    pub async fn next<Fut: Future<Output = IoResult<RpcStream<R>>>>(
-        &mut self,
-        mut f: impl FnMut(RpcIncomingMessage<RpcStream<R>>) -> Fut,
-    ) -> IoResult<R> {
+    pub fn new() -> Self {
+        SharedReader {
+            requests: Arc::new(RequestDispatch::new()),
+        }
+    }
+
+    pub async fn next(
+        &self,
+        mut stream: RpcStream<R>,
+    ) -> IoResult<RpcIncomingMessage<RpcStream<R>>> {
         loop {
-            self.state = match self.state.take() {
-                ReaderState::Owned(stream) => {
-                    match stream.next().await? {
-                        RpcMessage::Request(req) => {
-                            ReaderState::Owned(f(RpcIncomingMessage::Request(req)).await?)
+            stream = match stream.next().await? {
+                RpcMessage::Request(req) => {
+                    return Ok(RpcIncomingMessage::Request(req));
+                }
+                RpcMessage::Notify => {
+                    return Ok(RpcIncomingMessage::Notify);
+                }
+                RpcMessage::Response(rsp) => {
+                    let id = rsp.id();
+                    if let Some(sender) = self.requests.remove(id) {
+                        // Decode the message to get an Ok/Err result
+                        let result = rsp.result().await?;
+                        let (result, receiver) = RpcResultFuture::from_result(result);
+                        if let Err(_r) = sender.send(result) {
+                            println!("Got unsolicitied response {:?} (receiver dead)", id);
+                            // If the receiver was dropped, we get the
+                            // result back. Dropping it here will
+                            // complete our receiver just as if the
+                            // client code received it and dropped it.
                         }
-                        RpcMessage::Notify => {
-                            ReaderState::Owned(f(RpcIncomingMessage::Notify).await?)
-                        }
-                        RpcMessage::Response(rsp) => {
-                            let id = rsp.id();
-                            if let Some(sender) = self.requests.remove(id) {
-                                // Decode the message to get an Ok/Err result
-                                let result = rsp.result().await?;
-                                let (result, receiver) = RpcResultFuture::from_result(result);
-                                if let Err(_r) = sender.send(result) {
-                                    println!("Got unsolicitied response {:?} (receiver dead)", id);
-                                    // If the receiver was dropped, we get the
-                                    // result back. Dropping it here will
-                                    // complete our receiver just as if the
-                                    // client code received it and dropped it.
-                                }
-                                // oneshot::Canceled should not be possible
-                                // because drop on RpcResultFuture always sends
-                                // to the sender before the sender is dropped.
-                                let result = receiver.await.expect("reader not returned");
-                                // Consume the rest of the message if the client did not
-                                let stream = result.finish().await?;
-                                ReaderState::Owned(stream)
-                            } else {
-                                // TODO: error! from log crate
-                                println!("Got unsolicitied response {:?}", id);
-                                // Consume this message and loop
-                                let reader = rsp.skip().await?;
-                                ReaderState::Owned(reader)
-                            }
-                        }
+                        // oneshot::Canceled should not be possible
+                        // because drop on RpcResultFuture always sends
+                        // to the sender before the sender is dropped.
+                        let result = receiver.await.expect("reader not returned");
+                        // Consume the rest of the message if the client did not
+                        result.finish().await?
+                    } else {
+                        // TODO: error! from log crate
+                        println!("Got unsolicitied response {:?}", id);
+                        // Consume this message and loop
+                        rsp.skip().await?
                     }
                 }
-                ReaderState::Busy => unreachable!(),
             }
         }
     }
