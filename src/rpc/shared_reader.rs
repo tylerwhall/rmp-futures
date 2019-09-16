@@ -137,23 +137,16 @@ struct RpcResultFutureInner<R> {
 
 pub struct RpcResultFuture<R>(Option<RpcResultFutureInner<R>>);
 
+pub type StreamResultFuture<R> = super::decode::RpcResultFuture<RpcStream<R>>;
+
 impl<R: AsyncRead + Unpin> RpcResultFuture<R> {
-    fn new(
-        result: super::decode::RpcResultFuture<RpcStream<R>>,
-        sender: Sender<super::decode::RpcResultFuture<RpcStream<R>>>,
-    ) -> Self {
+    fn new(result: StreamResultFuture<R>, sender: Sender<StreamResultFuture<R>>) -> Self {
         RpcResultFuture(Some(RpcResultFutureInner { result, sender }))
     }
 
     fn from_result(
-        result: Result<
-            ValueFuture<super::decode::RpcResultFuture<RpcStream<R>>>,
-            ValueFuture<super::decode::RpcResultFuture<RpcStream<R>>>,
-        >,
-    ) -> (
-        SentResult<R>,
-        Receiver<super::decode::RpcResultFuture<RpcStream<R>>>,
-    ) {
+        result: Result<ValueFuture<StreamResultFuture<R>>, ValueFuture<StreamResultFuture<R>>>,
+    ) -> (SentResult<R>, Receiver<StreamResultFuture<R>>) {
         // Channel for sending the reader back
         let (sender, receiver) = channel();
         (
