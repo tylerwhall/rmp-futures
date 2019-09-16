@@ -187,7 +187,10 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         Ok(BigEndian::read_f64(&self.read_8().await?))
     }
 
-    pub async fn skip(self) -> IoResult<R> {
+    pub async fn skip(self) -> IoResult<R>
+    where
+        R: 'static,
+    {
         let val = self.decode().await?;
         Ok(match val {
             ValueFuture::Nil(r) => r,
@@ -456,15 +459,21 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
     }
 
     /// Consume all remaining elements and return the underlying reader
-    pub async fn skip(self) -> IoResult<R> {
-        let mut a = self;
+    pub async fn skip(self) -> IoResult<R>
+    where
+        R: 'static,
+    {
+        if self.is_empty() {
+            return Ok(self.reader);
+        }
+        let mut a = self.into_dyn();
         loop {
             match a.next() {
                 MsgPackOption::Some(m) => {
                     a = m.skip().await?;
                 }
                 MsgPackOption::End(r) => {
-                    break Ok(r);
+                    break Ok(unsafe { Self::reader_from_dyn(r) });
                 }
             }
         }
@@ -507,21 +516,29 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
     where
         R: 'static,
     {
+        let a = self.into_dyn();
+        let (a, r) = a.into_value().await?;
+        let r = unsafe { Self::reader_from_dyn(r) };
+        Ok((a, r))
+    }
+
+    fn into_dyn(self) -> ArrayFuture<Box<dyn AsyncRead + Unpin + 'static>>
+    where
+        R: 'static,
+    {
         let reader: Box<dyn AsyncRead + Unpin + 'static> = Box::new(self.reader);
-        let a = ArrayFuture {
+        ArrayFuture {
             reader,
             len: self.len,
-        };
-        let (a, r) = a.into_value().await?;
+        }
+    }
+
+    unsafe fn reader_from_dyn(reader: Box<dyn AsyncRead + Unpin + 'static>) -> R {
         // This is what Box::downcast() does. Could use something like the
         // "mopa" crate. The unsafe risk is that the Boxed reader we get back
         // from into_value() could be different than R, so `into_reader()` must
         // uphold this.
-        let r = unsafe {
-            let raw: *mut dyn AsyncRead = Box::into_raw(r);
-            Box::from_raw(raw as *mut R)
-        };
-        Ok((a, *r))
+        *Box::from_raw(Box::into_raw(reader) as *mut R)
     }
 }
 
@@ -529,7 +546,7 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
 /// returning the underlying reader
 pub struct FinalizedArray<R>(ArrayFuture<R>);
 
-impl<R: AsyncRead + Unpin> FinalizedArray<R> {
+impl<R: AsyncRead + Unpin + 'static> FinalizedArray<R> {
     pub async fn finish(self) -> IoResult<R> {
         self.0.skip().await
     }
@@ -580,7 +597,10 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
     }
 
     /// Consume all remaining elements and return the underlying reader
-    pub async fn skip(self) -> IoResult<R> {
+    pub async fn skip(self) -> IoResult<R>
+    where
+        R: 'static,
+    {
         let mut map = self;
         loop {
             match map.next_key() {
