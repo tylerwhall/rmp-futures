@@ -601,7 +601,10 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
     where
         R: 'static,
     {
-        let mut map = self;
+        if self.is_empty() {
+            return Ok(self.reader);
+        }
+        let mut map = self.into_dyn();
         loop {
             match map.next_key() {
                 MsgPackOption::Some(m) => {
@@ -609,7 +612,7 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
                     map = val.next_value().skip().await?;
                 }
                 MsgPackOption::End(r) => {
-                    break Ok(r);
+                    break Ok(unsafe { Self::reader_from_dyn(r) });
                 }
             }
         }
@@ -653,21 +656,29 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
     where
         R: 'static,
     {
+        let m = self.into_dyn();
+        let (m, r) = m.into_value().await?;
+        let r = unsafe { Self::reader_from_dyn(r) };
+        Ok((m, r))
+    }
+
+    fn into_dyn(self) -> MapFuture<Box<dyn AsyncRead + Unpin + 'static>>
+    where
+        R: 'static,
+    {
         let reader: Box<dyn AsyncRead + Unpin + 'static> = Box::new(self.reader);
-        let m = MapFuture {
+        MapFuture {
             reader,
             len: self.len,
-        };
-        let (m, r) = m.into_value().await?;
+        }
+    }
+
+    unsafe fn reader_from_dyn(reader: Box<dyn AsyncRead + Unpin + 'static>) -> R {
         // This is what Box::downcast() does. Could use something like the
         // "mopa" crate. The unsafe risk is that the Boxed reader we get back
-        // from into_value() could be different than R, so `into_value()` must
+        // from into_value() could be different than R, so `into_reader()` must
         // uphold this.
-        let r = unsafe {
-            let raw: *mut dyn AsyncRead = Box::into_raw(r);
-            Box::from_raw(raw as *mut R)
-        };
-        Ok((m, *r))
+        *Box::from_raw(Box::into_raw(reader) as *mut R)
     }
 }
 
