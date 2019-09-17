@@ -6,7 +6,7 @@ use futures::channel::oneshot::{channel, Receiver, Sender};
 use futures::io::Result as IoResult;
 use futures::prelude::*;
 
-use super::decode::{RpcMessage, RpcRequestFuture, RpcResponseFuture, RpcStream};
+use super::decode::{RpcMessage, RpcNotifyFuture, RpcRequestFuture, RpcResponseFuture, RpcStream};
 use super::MsgId;
 use crate::decode::{ValueFuture, WrapReader};
 
@@ -57,10 +57,7 @@ impl<R> RequestDispatch<R> {
 }
 
 impl<R: AsyncRead + Unpin + 'static> RequestDispatch<R> {
-    pub async fn dispatch_one(
-        &self,
-        rsp: RpcResponseFuture<RpcStream<R>>,
-    ) -> IoResult<RpcStream<R>> {
+    async fn dispatch_one(&self, rsp: RpcResponseFuture<RpcStream<R>>) -> IoResult<RpcStream<R>> {
         let id = rsp.id();
         if let Some(sender) = self.remove(id) {
             // Decode the message to get an Ok/Err result
@@ -100,7 +97,16 @@ impl<R: AsyncRead + Unpin + 'static> RequestDispatch<R> {
                         .skip()
                         .await?
                 }
-                RpcMessage::Notify => unimplemented!(),
+                RpcMessage::Notify(nfy) => {
+                    nfy.method()
+                        .await?
+                        .skip()
+                        .await?
+                        .params()
+                        .await?
+                        .skip()
+                        .await?
+                }
                 RpcMessage::Response(rsp) => self.dispatch_one(rsp).await?,
             }
         }
@@ -115,8 +121,8 @@ impl<R: AsyncRead + Unpin + 'static> RequestDispatch<R> {
                 RpcMessage::Request(req) => {
                     return Ok(RpcIncomingMessage::Request(req));
                 }
-                RpcMessage::Notify => {
-                    return Ok(RpcIncomingMessage::Notify);
+                RpcMessage::Notify(nfy) => {
+                    return Ok(RpcIncomingMessage::Notify(nfy));
                 }
                 RpcMessage::Response(rsp) => self.dispatch_one(rsp).await?,
             }
@@ -188,5 +194,5 @@ impl<R: AsyncRead + Unpin> AsyncRead for RpcResultFuture<R> {
 /// this point.
 pub enum RpcIncomingMessage<R> {
     Request(RpcRequestFuture<R>),
-    Notify,
+    Notify(RpcNotifyFuture<R>),
 }

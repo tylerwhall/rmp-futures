@@ -14,7 +14,7 @@ use crate::decode::{ArrayFuture, MsgPackFuture, StringFuture, ValueFuture};
 pub enum RpcMessage<R> {
     Request(RpcRequestFuture<R>),
     Response(RpcResponseFuture<R>),
-    Notify,
+    Notify(RpcNotifyFuture<R>),
 }
 
 impl<R> RpcMessage<R> {
@@ -24,6 +24,10 @@ impl<R> RpcMessage<R> {
 
     fn response(id: MsgId, array: ArrayFuture<R>) -> Self {
         RpcMessage::Response(RpcResponseFuture { array, id })
+    }
+
+    fn notify(array: ArrayFuture<R>) -> Self {
+        RpcMessage::Notify(RpcNotifyFuture { array })
     }
 }
 
@@ -146,6 +150,25 @@ impl<R: AsyncRead + Unpin> AsyncRead for RpcResultFuture<R> {
     }
 }
 
+pub struct RpcNotifyFuture<R> {
+    array: ArrayFuture<R>,
+}
+
+impl<R: AsyncRead + Unpin> RpcNotifyFuture<R> {
+    pub async fn method(self) -> IoResult<StringFuture<RpcParamsFuture<R>>> {
+        self.array
+            .next()
+            .into_option()
+            // Wrap with RpcParamsFuture before potentially returning the ValueFuture
+            .map(|m| MsgPackFuture::new(RpcParamsFuture(m.into_inner())))
+            .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "array missing method field"))?
+            .decode()
+            .await?
+            .into_string()
+            .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "expected method string"))
+    }
+}
+
 pub struct RpcStream<R> {
     reader: R,
 }
@@ -201,10 +224,7 @@ impl<R: AsyncRead + Unpin> RpcStream<R> {
             Some(MsgType::Response) => Self::decode_msgid(array)
                 .await
                 .map(|(msgid, array)| RpcMessage::response(msgid, array)),
-            Some(MsgType::Notification) => {
-                // Notify
-                unimplemented!()
-            }
+            Some(MsgType::Notification) => Ok(RpcMessage::notify(array)),
             None => Err(IoError::new(
                 ErrorKind::InvalidData,
                 format!("invalid msgtype {}", ty),

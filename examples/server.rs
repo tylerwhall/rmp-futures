@@ -73,7 +73,7 @@ async fn handler(stream: TcpStream, t: ThreadPool) -> io::Result<()> {
                 }
             }
             RpcMessage::Response(_resp) => panic!("got response"),
-            RpcMessage::Notify => panic!("got notify"),
+            RpcMessage::Notify(_nfy) => panic!("got notify"),
         };
     }
 }
