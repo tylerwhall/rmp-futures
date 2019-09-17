@@ -7,7 +7,7 @@ use futures::prelude::*;
 use super::encode::RpcSink;
 use crate::mutex::{Mutex, MutexGuard};
 
-struct SharedWriter<W> {
+pub struct SharedWriter<W> {
     writer: Mutex<W>,
 }
 
