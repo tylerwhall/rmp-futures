@@ -1,3 +1,4 @@
+#![allow(unused)]
 use futures::future::{FusedFuture, Future};
 use futures::task::{Context, Poll, Waker};
 use slab::Slab;
