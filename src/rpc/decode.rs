@@ -53,6 +53,20 @@ impl<R: AsyncRead + Unpin> RpcRequestFuture<R> {
             .into_string()
             .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "expected method string"))
     }
+
+    pub async fn skip(self) -> IoResult<R>
+    where
+        R: 'static,
+    {
+        self.method()
+            .await?
+            .skip()
+            .await?
+            .params()
+            .await?
+            .skip()
+            .await
+    }
 }
 
 pub struct RpcParamsFuture<R>(ArrayFuture<R>);
@@ -166,6 +180,20 @@ impl<R: AsyncRead + Unpin> RpcNotifyFuture<R> {
             .await?
             .into_string()
             .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "expected method string"))
+    }
+
+    pub async fn skip(self) -> IoResult<R>
+    where
+        R: 'static,
+    {
+        self.method()
+            .await?
+            .skip()
+            .await?
+            .params()
+            .await?
+            .skip()
+            .await
     }
 }
 

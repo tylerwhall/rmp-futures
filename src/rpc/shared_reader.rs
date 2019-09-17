@@ -84,34 +84,18 @@ impl<R: AsyncRead + Unpin + 'static> RequestDispatch<R> {
         }
     }
 
+    /// A future that dispatches method responses and never returns
     pub async fn dispatch(&self, mut stream: RpcStream<R>) -> IoResult<()> {
         loop {
             stream = match stream.next().await? {
-                RpcMessage::Request(req) => {
-                    req.method()
-                        .await?
-                        .skip()
-                        .await?
-                        .params()
-                        .await?
-                        .skip()
-                        .await?
-                }
-                RpcMessage::Notify(nfy) => {
-                    nfy.method()
-                        .await?
-                        .skip()
-                        .await?
-                        .params()
-                        .await?
-                        .skip()
-                        .await?
-                }
+                RpcMessage::Request(req) => req.skip().await?,
+                RpcMessage::Notify(nfy) => nfy.skip().await?,
                 RpcMessage::Response(rsp) => self.dispatch_one(rsp).await?,
             }
         }
     }
 
+    /// Dispatches responses and yields requests and notifies
     pub async fn next(
         &self,
         mut stream: RpcStream<R>,
