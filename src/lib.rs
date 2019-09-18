@@ -1,7 +1,3 @@
-#![feature(async_await)]
-// async syntax confuses clippy (2019/07/30)
-#![allow(clippy::needless_lifetimes)]
-
 #[macro_use]
 extern crate enum_primitive_derive;
 
