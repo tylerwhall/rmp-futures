@@ -228,12 +228,19 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
             ValueFuture::Integer(_i, r) => r,
             ValueFuture::F32(_f, r) => r,
             ValueFuture::F64(_f, r) => r,
-            ValueFuture::Array(a) => a.skip().boxed_local().await?,
-            ValueFuture::Map(m) => m.skip().boxed_local().await?,
+            ValueFuture::Array(a) => a.skip().await?,
+            ValueFuture::Map(m) => m.skip().await?,
             ValueFuture::Bin(m) => m.skip().await?,
             ValueFuture::String(s) => s.skip().await?,
             ValueFuture::Ext(e) => e.skip().await?,
         })
+    }
+
+    pub fn skip_dyn(self) -> Pin<Box<dyn Future<Output = IoResult<R>>>>
+    where
+        R: 'static,
+    {
+        self.skip().boxed_local()
     }
 
     pub async fn decode(mut self) -> IoResult<ValueFuture<R>> {
@@ -435,12 +442,19 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
             ValueFuture::Integer(i, r) => (Value::Integer(i), r),
             ValueFuture::F32(f, r) => (Value::F32(f), r),
             ValueFuture::F64(f, r) => (Value::F64(f), r),
-            ValueFuture::Array(a) => a.into_value_dyn().boxed_local().await?,
-            ValueFuture::Map(m) => m.into_value_dyn().boxed_local().await?,
+            ValueFuture::Array(a) => a.into_value().await?,
+            ValueFuture::Map(m) => m.into_value().await?,
             ValueFuture::Bin(m) => m.into_value().await?,
             ValueFuture::String(s) => s.into_value().await?,
             ValueFuture::Ext(e) => e.into_value().await?,
         })
+    }
+
+    pub fn into_value_dyn(self) -> Pin<Box<dyn Future<Output = IoResult<(Value, R)>>>>
+    where
+        R: 'static,
+    {
+        self.into_value().boxed_local()
     }
 }
 
@@ -511,7 +525,7 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
         loop {
             match a.next() {
                 MsgPackOption::Some(m) => {
-                    a = m.skip().await?;
+                    a = m.skip_dyn().await?;
                 }
                 MsgPackOption::End(r) => {
                     break Ok(unsafe { Self::reader_from_dyn(r) });
@@ -524,43 +538,20 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
     where
         R: 'static,
     {
-        let mut a = self;
+        let mut a = self.into_dyn();
         let mut v = Vec::with_capacity(a.len());
         loop {
             match a.next() {
                 MsgPackOption::Some(m) => {
-                    let (value, next) = m.into_value().await?;
+                    let (value, next) = m.into_value_dyn().await?;
                     v.push(value);
                     a = next;
                 }
                 MsgPackOption::End(r) => {
-                    break Ok((Value::Array(v), r));
+                    break Ok((Value::Array(v), unsafe { Self::reader_from_dyn(r) }));
                 }
             }
         }
-    }
-
-    /// Call into_value() after constructing a new ArrayFuture with the reader
-    /// converted to a boxed trait object
-    ///
-    /// This is needed to allow possible infinite recursion in an async function.
-    /// Since each level of nesting creates a new wrapper type containing the
-    /// length, it's not possible to evaluate all the possible levels of nesting
-    /// and pre-allocate the storage space, because it is infinite. Boxing the
-    /// reader on the heap at each array/map level provides for the dynamic
-    /// storage and makes the type of R (boxed trait) the same at each level of
-    /// nesting.
-    ///
-    /// Only necessary for the completely dynamic case where the decoder doesn't
-    /// know the structure of the message up front.
-    async fn into_value_dyn(self) -> IoResult<(Value, R)>
-    where
-        R: 'static,
-    {
-        let a = self.into_dyn();
-        let (a, r) = a.into_value().await?;
-        let r = unsafe { Self::reader_from_dyn(r) };
-        Ok((a, r))
     }
 
     fn into_dyn(self) -> ArrayFuture<Box<dyn AsyncRead + Unpin + 'static>>
@@ -660,8 +651,8 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
         loop {
             match map.next_key() {
                 MsgPackOption::Some(m) => {
-                    let val = m.skip().await?;
-                    map = val.next_value().skip().await?;
+                    let val = m.skip_dyn().await?;
+                    map = val.next_value().skip_dyn().await?;
                 }
                 MsgPackOption::End(r) => {
                     break Ok(unsafe { Self::reader_from_dyn(r) });
@@ -674,44 +665,21 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
     where
         R: 'static,
     {
-        let mut map = self;
+        let mut map = self.into_dyn();
         let mut v = Vec::with_capacity(map.len());
         loop {
             match map.next_key() {
                 MsgPackOption::Some(m) => {
-                    let (key, val) = m.into_value().await?;
-                    let (val, next) = val.next_value().into_value().await?;
+                    let (key, val) = m.into_value_dyn().await?;
+                    let (val, next) = val.next_value().into_value_dyn().await?;
                     v.push((key, val));
                     map = next;
                 }
                 MsgPackOption::End(r) => {
-                    break Ok((Value::Map(v), r));
+                    break Ok((Value::Map(v), unsafe { Self::reader_from_dyn(r) }));
                 }
             }
         }
-    }
-
-    /// Call into_value() after constructing a new ArrayFuture with the reader
-    /// converted to a boxed trait object
-    ///
-    /// This is needed to allow possible infinite recursion in an async function.
-    /// Since each level of nesting creates a new wrapper type containing the
-    /// length, it's not possible to evaluate all the possible levels of nesting
-    /// and pre-allocate the storage space, because it is infinite. Boxing the
-    /// reader on the heap at each array/map level provides for the dynamic
-    /// storage and makes the type of R (boxed trait) the same at each level of
-    /// nesting.
-    ///
-    /// Only necessary for the completely dynamic case where the decoder doesn't
-    /// know the structure of the message up front.
-    async fn into_value_dyn(self) -> IoResult<(Value, R)>
-    where
-        R: 'static,
-    {
-        let m = self.into_dyn();
-        let (m, r) = m.into_value().await?;
-        let r = unsafe { Self::reader_from_dyn(r) };
-        Ok((m, r))
     }
 
     fn into_dyn(self) -> MapFuture<Box<dyn AsyncRead + Unpin + 'static>>

@@ -577,14 +577,24 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
             Value::Binary(val) => self.write_bin(val).await,
             Value::Array(a) => {
                 let w = self.write_array_len(a.len().try_into().unwrap()).await?;
-                w.write_value_dyn(a).boxed_local().await
+                w.write_value(a).await
             }
             Value::Map(m) => {
                 let w = self.write_map_len(m.len().try_into().unwrap()).await?;
-                w.write_value_dyn(m).boxed_local().await
+                w.write_value(m).await
             }
             Value::Ext(ty, bytes) => self.write_ext(bytes, *ty).await,
         }
+    }
+
+    pub fn write_value_dyn<'a>(
+        self,
+        value: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = IoResult<W>> + 'a>>
+    where
+        W: 'static,
+    {
+        self.write_value(value).boxed_local()
     }
 }
 
@@ -676,46 +686,29 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
     where
         W: 'static,
     {
-        let mut aw = self;
+        let mut aw = self.into_dyn();
         for elem in a {
             let m = aw.next();
-            aw = m.write_value(elem).await?;
+            aw = m.write_value_dyn(elem).await?;
         }
-        Ok(aw.end())
+        Ok(unsafe { Self::writer_from_dyn(aw.end()) })
     }
 
-    /// Call write_value() after constructing a new ArrayFuture with the reader
-    /// converted to a boxed trait object
-    ///
-    /// This is needed to allow possible infinite recursion in an async function.
-    /// Since each level of nesting creates a new wrapper type containing the
-    /// length, it's not possible to evaluate all the possible levels of nesting
-    /// and pre-allocate the storage space, because it is infinite. Boxing the
-    /// reader on the heap at each array/map level provides for the dynamic
-    /// storage and makes the type of R (boxed trait) the same at each level of
-    /// nesting.
-    ///
-    /// Only necessary for the completely dynamic case where the decoder doesn't
-    /// know the structure of the message up front.
-    async fn write_value_dyn(self, value: &[Value]) -> IoResult<W>
+    fn into_dyn(self) -> ArrayFuture<Box<dyn AsyncWrite + Unpin + 'static>>
     where
         W: 'static,
     {
         let writer: Box<dyn AsyncWrite + Unpin + 'static> = Box::new(self.writer);
-        let a = ArrayFuture {
+        ArrayFuture {
             writer,
             len: self.len,
-        };
-        let w = a.write_value(value).await?;
+        }
+    }
+
+    unsafe fn writer_from_dyn(writer: Box<dyn AsyncWrite + Unpin + 'static>) -> W {
         // This is what Box::downcast() does. Could use something like the
-        // "mopa" crate. The unsafe risk is that the Boxed reader we get back
-        // from into_value() could be different than R, so `write_value()` must
-        // uphold this.
-        let w = unsafe {
-            let raw: *mut dyn AsyncWrite = Box::into_raw(w);
-            Box::from_raw(raw as *mut W)
-        };
-        Ok(*w)
+        // "mopa" crate. The unsafe risk is that the Boxed writer we get back W.
+        *Box::from_raw(Box::into_raw(writer) as *mut W)
     }
 }
 
@@ -771,52 +764,35 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
     where
         W: 'static,
     {
-        let mut m = self;
+        let mut m = self.into_dyn();
         for (k, v) in a {
             m = m
                 .next_key()
                 .unwrap()
-                .write_value(k)
+                .write_value_dyn(k)
                 .await?
                 .next_value()
-                .write_value(v)
+                .write_value_dyn(v)
                 .await?;
         }
-        Ok(m.next_key().unwrap_end())
+        Ok(unsafe { Self::writer_from_dyn(m.next_key().unwrap_end()) })
     }
 
-    /// Call write_value() after constructing a new MapFuture with the reader
-    /// converted to a boxed trait object
-    ///
-    /// This is needed to allow possible infinite recursion in an async function.
-    /// Since each level of nesting creates a new wrapper type containing the
-    /// length, it's not possible to evaluate all the possible levels of nesting
-    /// and pre-allocate the storage space, because it is infinite. Boxing the
-    /// reader on the heap at each array/map level provides for the dynamic
-    /// storage and makes the type of R (boxed trait) the same at each level of
-    /// nesting.
-    ///
-    /// Only necessary for the completely dynamic case where the decoder doesn't
-    /// know the structure of the message up front.
-    async fn write_value_dyn(self, value: &[(Value, Value)]) -> IoResult<W>
+    fn into_dyn(self) -> MapFuture<Box<dyn AsyncWrite + Unpin + 'static>>
     where
         W: 'static,
     {
         let writer: Box<dyn AsyncWrite + Unpin + 'static> = Box::new(self.writer);
-        let a = MapFuture {
+        MapFuture {
             writer,
             len: self.len,
-        };
-        let w = a.write_value(value).await?;
+        }
+    }
+
+    unsafe fn writer_from_dyn(writer: Box<dyn AsyncWrite + Unpin + 'static>) -> W {
         // This is what Box::downcast() does. Could use something like the
-        // "mopa" crate. The unsafe risk is that the Boxed reader we get back
-        // from into_value() could be different than R, so `write_value()` must
-        // uphold this.
-        let w = unsafe {
-            let raw: *mut dyn AsyncWrite = Box::into_raw(w);
-            Box::from_raw(raw as *mut W)
-        };
-        Ok(*w)
+        // "mopa" crate. The unsafe risk is that the Boxed writer we get back W.
+        *Box::from_raw(Box::into_raw(writer) as *mut W)
     }
 }
 
@@ -1117,5 +1093,4 @@ mod tests {
         test_against_rmpv(4_294_967_296i64);
         test_against_rmpv(std::i64::MIN);
     }
-
 }
