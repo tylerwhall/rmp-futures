@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 byteorder = "1.3"
 enum-primitive-derive = "0.1.2"
-num-traits = "0.2.8"
+num-traits = "0.2"
 rmp = "0.8"
 rmpv = "0.4"
 slab = "0.4"
