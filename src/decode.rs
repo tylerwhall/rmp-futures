@@ -1,3 +1,4 @@
+use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -152,8 +153,8 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
 
     async fn read_2(&mut self) -> IoResult<[u8; 2]> {
         unsafe {
-            let mut val: [u8; 2] = std::mem::uninitialized();
-            self.reader.initializer().initialize(&mut val);
+            let mut val = MaybeUninit::<[u8; 2]>::uninit().assume_init();
+            self.reader.initializer().initialize(&mut val[..]);
             self.reader.read_exact(&mut val[..]).await?;
             Ok(val)
         }
@@ -161,7 +162,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
 
     async fn read_4(&mut self) -> IoResult<[u8; 4]> {
         unsafe {
-            let mut val: [u8; 4] = std::mem::uninitialized();
+            let mut val = MaybeUninit::<[u8; 4]>::uninit().assume_init();
             self.reader.initializer().initialize(&mut val);
             self.reader.read_exact(&mut val[..]).await?;
             Ok(val)
@@ -170,7 +171,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
 
     async fn read_8(&mut self) -> IoResult<[u8; 8]> {
         unsafe {
-            let mut val: [u8; 8] = std::mem::uninitialized();
+            let mut val = MaybeUninit::<[u8; 8]>::uninit().assume_init();
             self.reader.initializer().initialize(&mut val);
             self.reader.read_exact(&mut val[..]).await?;
             Ok(val)
