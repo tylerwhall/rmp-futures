@@ -690,7 +690,7 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
 
     fn into_dyn<'a>(self) -> ArrayFuture<Box<dyn AsyncWrite + Unpin + 'a>>
     where
-        Self: 'a,
+        W: 'a,
     {
         let writer: Box<dyn AsyncWrite + Unpin + 'a> = Box::new(self.writer);
         ArrayFuture {
