@@ -555,10 +555,7 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     /// # Panics
     ///
     /// Panics if array or map length exceeds 2^32-1
-    pub async fn write_value(self, value: &Value) -> IoResult<W>
-    where
-        W: 'static,
-    {
+    pub async fn write_value(self, value: &Value) -> IoResult<W> {
         match value {
             Value::Nil => self.write_nil().await,
             Value::Boolean(val) => self.write_bool(*val).await,
@@ -592,7 +589,7 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
         value: &'a Value,
     ) -> Pin<Box<dyn Future<Output = IoResult<W>> + 'a>>
     where
-        W: 'static,
+        W: 'a,
     {
         self.write_value(value).boxed_local()
     }
@@ -682,10 +679,7 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
         MsgPackWriter::new(self.writer)
     }
 
-    async fn write_value(self, a: &[Value]) -> IoResult<W>
-    where
-        W: 'static,
-    {
+    async fn write_value(self, a: &[Value]) -> IoResult<W> {
         let mut aw = self.into_dyn();
         for elem in a {
             let m = aw.next();
@@ -694,18 +688,21 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
         Ok(unsafe { Self::writer_from_dyn(aw.end()) })
     }
 
-    fn into_dyn(self) -> ArrayFuture<Box<dyn AsyncWrite + Unpin + 'static>>
+    fn into_dyn<'a>(self) -> ArrayFuture<Box<dyn AsyncWrite + Unpin + 'a>>
     where
-        W: 'static,
+        Self: 'a,
     {
-        let writer: Box<dyn AsyncWrite + Unpin + 'static> = Box::new(self.writer);
+        let writer: Box<dyn AsyncWrite + Unpin + 'a> = Box::new(self.writer);
         ArrayFuture {
             writer,
             len: self.len,
         }
     }
 
-    unsafe fn writer_from_dyn(writer: Box<dyn AsyncWrite + Unpin + 'static>) -> W {
+    unsafe fn writer_from_dyn<'a>(writer: Box<dyn AsyncWrite + Unpin + 'a>) -> W
+    where
+        W: 'a,
+    {
         // This is what Box::downcast() does. Could use something like the
         // "mopa" crate. The unsafe risk is that the Boxed writer we get back W.
         *Box::from_raw(Box::into_raw(writer) as *mut W)
@@ -760,10 +757,7 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
         }
     }
 
-    async fn write_value(self, a: &[(Value, Value)]) -> IoResult<W>
-    where
-        W: 'static,
-    {
+    async fn write_value(self, a: &[(Value, Value)]) -> IoResult<W> {
         let mut m = self.into_dyn();
         for (k, v) in a {
             m = m
@@ -778,18 +772,21 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
         Ok(unsafe { Self::writer_from_dyn(m.next_key().unwrap_end()) })
     }
 
-    fn into_dyn(self) -> MapFuture<Box<dyn AsyncWrite + Unpin + 'static>>
+    fn into_dyn<'a>(self) -> MapFuture<Box<dyn AsyncWrite + Unpin + 'a>>
     where
-        W: 'static,
+        W: 'a,
     {
-        let writer: Box<dyn AsyncWrite + Unpin + 'static> = Box::new(self.writer);
+        let writer: Box<dyn AsyncWrite + Unpin + 'a> = Box::new(self.writer);
         MapFuture {
             writer,
             len: self.len,
         }
     }
 
-    unsafe fn writer_from_dyn(writer: Box<dyn AsyncWrite + Unpin + 'static>) -> W {
+    unsafe fn writer_from_dyn<'a>(writer: Box<dyn AsyncWrite + Unpin + 'a>) -> W
+    where
+        W: 'a,
+    {
         // This is what Box::downcast() does. Could use something like the
         // "mopa" crate. The unsafe risk is that the Boxed writer we get back W.
         *Box::from_raw(Box::into_raw(writer) as *mut W)
