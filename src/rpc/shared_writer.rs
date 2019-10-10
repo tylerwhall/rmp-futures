@@ -7,13 +7,13 @@ use futures::prelude::*;
 use super::encode::RpcSink;
 use crate::mutex::{Mutex, MutexGuard};
 
-pub struct SharedWriter<W> {
+pub struct SharedRpcSink<W> {
     writer: Mutex<W>,
 }
 
-impl<W: AsyncWrite + Unpin> SharedWriter<W> {
+impl<W: AsyncWrite + Unpin> SharedRpcSink<W> {
     pub fn new(writer: W) -> Self {
-        SharedWriter {
+        SharedRpcSink {
             writer: Mutex::new(writer),
         }
     }
@@ -39,11 +39,11 @@ impl<'a, W: AsyncWrite + Unpin> AsyncWrite for MutexGuard<'a, W> {
 }
 
 #[test]
-fn shared_writer() {
+fn shared_sink() {
     use std::sync::Arc;
 
     let writer = Vec::new();
-    let shared = Arc::new(SharedWriter::new(writer));
+    let shared = Arc::new(SharedRpcSink::new(writer));
     let shared2 = shared.clone();
 
     // Make sure we can share the writer with another thread

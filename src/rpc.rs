@@ -4,7 +4,7 @@ mod shared_reader;
 mod shared_writer;
 
 pub use shared_reader::{RequestDispatch, ResponseReceiver, RpcIncomingMessage};
-pub use shared_writer::SharedWriter;
+pub use shared_writer::SharedRpcSink;
 
 use crate::encode::EfficientInt;
 
