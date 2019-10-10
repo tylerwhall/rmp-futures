@@ -152,6 +152,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
     }
 
     async fn read_2(&mut self) -> IoResult<[u8; 2]> {
+        #[allow(clippy::uninit_assumed_init)]
         unsafe {
             let mut val = MaybeUninit::<[u8; 2]>::uninit().assume_init();
             self.reader.initializer().initialize(&mut val[..]);
@@ -161,6 +162,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
     }
 
     async fn read_4(&mut self) -> IoResult<[u8; 4]> {
+        #[allow(clippy::uninit_assumed_init)]
         unsafe {
             let mut val = MaybeUninit::<[u8; 4]>::uninit().assume_init();
             self.reader.initializer().initialize(&mut val);
@@ -170,6 +172,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
     }
 
     async fn read_8(&mut self) -> IoResult<[u8; 8]> {
+        #[allow(clippy::uninit_assumed_init)]
         unsafe {
             let mut val = MaybeUninit::<[u8; 8]>::uninit().assume_init();
             self.reader.initializer().initialize(&mut val);
