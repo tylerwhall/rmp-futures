@@ -1,4 +1,5 @@
 #![feature(async_await)]
+#![feature(read_initializer)]
 
 #[macro_use]
 extern crate enum_primitive_derive;
