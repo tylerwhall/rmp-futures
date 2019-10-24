@@ -104,6 +104,25 @@ impl<W: AsyncWrite + Unpin> RpcSink<W> {
         let ok = write_err(err).await?;
         ok.last().write_nil().await
     }
+
+    #[must_use]
+    pub async fn write_notify(
+        self,
+        method: impl AsRef<str>,
+        num_args: u32,
+    ) -> IoResult<ArrayFuture<RpcSink<W>>> {
+        let args = MsgPackWriter::new(self)
+            .write_array_len(3)
+            .await?
+            .next()
+            .write_int(MsgType::Notification)
+            .await?
+            .next()
+            .write_str(method.as_ref())
+            .await?
+            .last();
+        args.write_array_len(num_args).await
+    }
 }
 
 #[test]
