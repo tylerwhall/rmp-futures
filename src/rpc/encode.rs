@@ -106,7 +106,7 @@ impl<W: AsyncWrite + Unpin> RpcSink<W> {
     }
 
     #[must_use]
-    pub async fn write_notify(
+    pub async fn write_notification(
         self,
         method: impl AsRef<str>,
         num_args: u32,
