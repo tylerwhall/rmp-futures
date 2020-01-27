@@ -538,7 +538,7 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
         }
     }
 
-    pub async fn into_value(self) -> IoResult<(Value, R)>
+    pub async fn into_value_vec(self) -> IoResult<(Vec<Value>, R)>
     where
         R: 'static,
     {
@@ -552,10 +552,17 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
                     a = next;
                 }
                 MsgPackOption::End(r) => {
-                    break Ok((Value::Array(v), unsafe { Self::reader_from_dyn(r) }));
+                    break Ok((v, unsafe { Self::reader_from_dyn(r) }));
                 }
             }
         }
+    }
+
+    pub fn into_value(self) -> impl Future<Output = IoResult<(Value, R)>>
+    where
+        R: 'static,
+    {
+        self.into_value_vec().map_ok(|(v, r)| (Value::Array(v), r))
     }
 
     fn into_dyn(self) -> ArrayFuture<Box<dyn AsyncRead + Unpin + 'static>>
