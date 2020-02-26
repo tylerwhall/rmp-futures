@@ -1,5 +1,3 @@
-#![feature(async_await)]
-
 use futures::executor::{block_on, ThreadPool};
 use futures::io::AsyncRead;
 use futures::io::AsyncReadExt;

@@ -1,4 +1,3 @@
-#![feature(async_await)]
 #![feature(read_initializer)]
 
 #[macro_use]

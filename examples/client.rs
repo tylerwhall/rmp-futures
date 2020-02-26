@@ -1,5 +1,3 @@
-#![feature(async_await)]
-
 use futures::executor::LocalPool;
 use futures::io::AsyncReadExt;
 use futures::task::LocalSpawnExt;
