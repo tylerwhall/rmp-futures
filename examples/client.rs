@@ -1,6 +1,6 @@
 use async_std::net::TcpStream;
 use futures::executor::LocalPool;
-use futures::io::AsyncReadExt;
+use futures::io::{AsyncRead, AsyncReadExt};
 use futures::task::LocalSpawnExt;
 use std::io;
 use std::sync::Arc;
@@ -8,6 +8,7 @@ use std::sync::Arc;
 use rmp_futures::rpc::decode::RpcStream;
 use rmp_futures::rpc::encode::RpcSink;
 use rmp_futures::rpc::RequestDispatch;
+use rmp_futures::rpc::ResponseReceiver;
 
 fn main() -> io::Result<()> {
     let mut pool = LocalPool::new();
@@ -35,18 +36,21 @@ fn main() -> io::Result<()> {
         let args = sink.write_request(id, "hello", 1).await?;
         let _sink = args.last().write_str("Bob").await?;
 
-        for reply in [reply1, reply2].iter_mut() {
+        async fn print_reply(reply: ResponseReceiver<impl AsyncRead + Unpin>) {
             match reply.await.unwrap() {
                 Ok(vf) => {
-                    let (s, _stream) = vf.into_string().unwrap().into_string().await?;
+                    let (s, _stream) = vf.into_string().unwrap().into_string().await.unwrap();
                     println!("got good response s={:?}", s);
                 }
                 Err(vf) => {
-                    let (s, _stream) = vf.into_string().unwrap().into_string().await?;
+                    let (s, _stream) = vf.into_string().unwrap().into_string().await.unwrap();
                     println!("got bad response s={:?}", s);
                 }
             }
         }
+
+        futures::join!(print_reply(reply1), print_reply(reply2));
+
         Ok(())
     })
 }
