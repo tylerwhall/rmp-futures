@@ -1,5 +1,4 @@
-#![feature(read_initializer)]
-
+#![cfg_attr(feature = "read-initializer", feature(read_initializer))]
 #[macro_use]
 extern crate enum_primitive_derive;
 
