@@ -1,11 +1,9 @@
-use futures::executor::{block_on, ThreadPool};
+use async_std::net::{TcpListener, TcpStream};
 use futures::io::AsyncRead;
 use futures::io::AsyncReadExt;
 use futures::io::AsyncWrite;
 use futures::lock::Mutex;
-use futures::task::SpawnExt;
 use futures::StreamExt;
-use romio::{TcpListener, TcpStream};
 use std::io;
 use std::sync::Arc;
 
@@ -15,12 +13,7 @@ use rmp_futures::rpc::decode::RpcStream;
 use rmp_futures::rpc::encode::RpcSink;
 use rmp_futures::rpc::MsgId;
 
-async fn hello_handler<W, R>(
-    id: MsgId,
-    w: Arc<Mutex<Option<W>>>,
-    params: RpcParamsFuture<R>,
-    mut t: &ThreadPool,
-) -> R
+async fn hello_handler<W, R>(id: MsgId, w: Arc<Mutex<Option<W>>>, params: RpcParamsFuture<R>) -> R
 where
     W: AsyncWrite + Unpin + Send + 'static,
     R: AsyncRead + Unpin,
@@ -37,7 +30,7 @@ where
         .into_string()
         .await
         .unwrap();
-    t.spawn(async move {
+    async_std::task::spawn(async move {
         let mut w = w.lock().await;
         let writer = w.take().unwrap();
         let sink = RpcSink::new(writer);
@@ -49,12 +42,11 @@ where
                 .into_inner(),
         );
         println!("got hello with id={:?} param={}", id, param1);
-    })
-    .unwrap();
+    });
     reader
 }
 
-async fn handler(stream: TcpStream, t: ThreadPool) -> io::Result<()> {
+async fn handler(stream: TcpStream) -> io::Result<()> {
     let (reader, writer) = stream.split();
     let w = Arc::new(Mutex::new(Some(writer)));
     let mut reader = RpcStream::new(reader);
@@ -66,7 +58,7 @@ async fn handler(stream: TcpStream, t: ThreadPool) -> io::Result<()> {
                 let (method, params) = method.into_string().await?;
                 let w = w.clone();
                 match method.as_ref() {
-                    "hello" => hello_handler(id, w, params, &t).await,
+                    "hello" => hello_handler(id, w, params).await,
                     _ => panic!("unknown method"),
                 }
             }
@@ -76,29 +68,24 @@ async fn handler(stream: TcpStream, t: ThreadPool) -> io::Result<()> {
     }
 }
 
-fn main() -> io::Result<()> {
-    block_on(async {
-        let mut threadpool = ThreadPool::new()?;
-        let mut listener = TcpListener::bind(&"127.0.0.1:12345".parse().unwrap())?;
-        let mut incoming = listener.incoming();
+#[async_std::main]
+async fn main() -> io::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:12345").await?;
+    let mut incoming = listener.incoming();
 
-        println!("listening on port 12345");
+    println!("listening on port 12345");
 
-        while let Some(stream) = incoming.next().await {
-            let stream = stream?;
-            let t = threadpool.clone();
-            threadpool
-                .spawn(async move {
-                    let addr = stream.peer_addr().unwrap();
-                    println!("accepting stream from: {}", addr);
-                    match handler(stream, t).await {
-                        Ok(_) => println!("it was ok!"),
-                        Err(e) => eprintln!("got error: {:?}", e),
-                    }
-                    println!("closing stream from: {}", addr);
-                })
-                .unwrap();
-        }
-        Ok(())
-    })
+    while let Some(stream) = incoming.next().await {
+        let stream = stream?;
+        async_std::task::spawn(async move {
+            let addr = stream.peer_addr().unwrap();
+            println!("accepting stream from: {}", addr);
+            match handler(stream).await {
+                Ok(_) => println!("it was ok!"),
+                Err(e) => eprintln!("got error: {:?}", e),
+            }
+            println!("closing stream from: {}", addr);
+        });
+    }
+    Ok(())
 }

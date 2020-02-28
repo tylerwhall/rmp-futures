@@ -1,7 +1,7 @@
+use async_std::net::TcpStream;
 use futures::executor::LocalPool;
 use futures::io::AsyncReadExt;
 use futures::task::LocalSpawnExt;
-use romio::TcpStream;
 use std::io;
 use std::sync::Arc;
 
@@ -11,10 +11,9 @@ use rmp_futures::rpc::RequestDispatch;
 
 fn main() -> io::Result<()> {
     let mut pool = LocalPool::new();
-    let mut spawner = pool.spawner();
+    let spawner = pool.spawner();
     pool.run_until(async {
-        let addr = "127.0.0.1:12345".parse().unwrap();
-        let socket = TcpStream::connect(&addr).await?;
+        let socket = TcpStream::connect("127.0.0.1:12345").await?;
 
         let (reader, writer) = socket.split();
         let sink = RpcSink::new(writer);
