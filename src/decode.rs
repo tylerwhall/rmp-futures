@@ -932,14 +932,13 @@ impl<R> DerefMut for ExtFuture<R> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use futures::io::Cursor;
     use rmpv::Value;
-    use std::io::Cursor;
 
     fn value_to_vec(val: &Value) -> Cursor<Vec<u8>> {
-        let mut buf = Cursor::new(Vec::new());
+        let mut buf = Vec::new();
         rmpv::encode::write_value(&mut buf, &val).unwrap();
-        buf.set_position(0);
-        buf
+        Cursor::new(buf)
     }
 
     #[test]

@@ -274,8 +274,8 @@ impl<R: AsyncRead + Unpin> AsyncRead for RpcStream<R> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use futures::io::Cursor;
     use rmpv::Value;
-    use std::io::Cursor;
 
     #[test]
     fn decode_request() {
