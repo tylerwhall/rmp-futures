@@ -25,6 +25,7 @@ pub(crate) trait WrapReader<R, R2> {
     fn wrap(self, wrap: impl FnOnce(R) -> R2) -> Self::Output;
 }
 
+#[must_use]
 #[derive(Debug)]
 pub enum ValueFuture<R> {
     Nil(R),
@@ -59,6 +60,7 @@ impl<R, R2> WrapReader<R, R2> for ValueFuture<R> {
 }
 
 impl<R> ValueFuture<R> {
+    #[must_use]
     pub fn into_bool(self) -> Option<(bool, R)> {
         if let ValueFuture::Boolean(val, r) = self {
             Some((val, r))
@@ -67,6 +69,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn into_bin(self) -> Option<BinFuture<R>> {
         if let ValueFuture::Bin(bin) = self {
             Some(bin)
@@ -75,6 +78,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn into_string(self) -> Option<StringFuture<R>> {
         if let ValueFuture::String(s) = self {
             Some(s)
@@ -83,6 +87,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn into_ext(self) -> Option<ExtFuture<R>> {
         if let ValueFuture::Ext(ext) = self {
             Some(ext)
@@ -91,6 +96,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn into_array(self) -> Option<ArrayFuture<R>> {
         if let ValueFuture::Array(array) = self {
             Some(array)
@@ -99,6 +105,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn into_map(self) -> Option<MapFuture<R>> {
         if let ValueFuture::Map(map) = self {
             Some(map)
@@ -107,6 +114,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn into_u64(self) -> Option<(u64, R)> {
         if let ValueFuture::Integer(val, r) = self {
             val.as_u64().map(|val| (val, r))
@@ -115,6 +123,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn into_f32(self) -> Option<(f32, R)> {
         if let ValueFuture::F32(val, r) = self {
             Some((val, r))
@@ -123,6 +132,7 @@ impl<R> ValueFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn into_f64(self) -> Option<(f64, R)> {
         if let ValueFuture::F64(val, r) = self {
             Some((val, r))
@@ -132,6 +142,7 @@ impl<R> ValueFuture<R> {
     }
 }
 
+#[must_use]
 pub struct MsgPackFuture<R> {
     reader: R,
 }
@@ -533,6 +544,7 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn next_dyn<'a>(&'a mut self) -> Option<MsgPackFuture<&'a mut (dyn AsyncRead + Unpin)>> {
         if self.len > 0 {
             self.len -= 1;
@@ -642,6 +654,7 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
         }
     }
 
+    #[must_use]
     pub fn next_key_dyn<'a>(
         &'a mut self,
     ) -> Option<MsgPackFuture<MsgPackFuture<&'a mut (dyn AsyncRead + Unpin)>>> {
