@@ -653,6 +653,10 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
 
     /// Return a `MsgPackWriter` for the next array element
     ///
+    /// Use for encoding a fixed amount of nesting of arrays/maps that can be
+    /// modeled with straight-line code. For recursion or looping where the depth
+    /// is not known at compile time, see `next_dyn()`.
+    ///
     /// #Panics
     ///
     /// Panics if self.is_empty() is true. `next()` must be called no more times
@@ -661,6 +665,24 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
         assert!(!self.is_empty());
         self.len -= 1;
         MsgPackWriter::new(self)
+    }
+
+    /// Return a `MsgPackWriter` for the next array element
+    ///
+    /// Borrows from the ArrayFuture and the returned `MsgPackWriter` is based on
+    /// a trait object. This is useful for recursion. It is not possible to
+    /// manipulate this ArrayFuture while the `MsgPackWriter` exists, but the
+    /// user must be careful to write to it before dropping it, or the output
+    /// will be malformed.
+    ///
+    /// #Panics
+    ///
+    /// Panics if self.is_empty() is true. `next()` must be called no more times
+    /// than the array length originally written.
+    pub fn next_dyn(&mut self) -> MsgPackWriter<&mut (dyn AsyncWrite + Unpin)> {
+        assert!(!self.is_empty());
+        self.len -= 1;
+        MsgPackWriter::new(&mut self.writer)
     }
 
     /// If there is one element left, return a `MsgPackWriter` for the last array
@@ -679,33 +701,11 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
         MsgPackWriter::new(self.writer)
     }
 
-    async fn write_value(self, a: &[Value]) -> IoResult<W> {
-        let mut aw = self.into_dyn();
+    async fn write_value(mut self, a: &[Value]) -> IoResult<W> {
         for elem in a {
-            let m = aw.next();
-            aw = m.write_value_dyn(elem).await?;
+            self.next_dyn().write_value_dyn(elem).await?;
         }
-        Ok(unsafe { Self::writer_from_dyn(aw.end()) })
-    }
-
-    fn into_dyn<'a>(self) -> ArrayFuture<Box<dyn AsyncWrite + Unpin + 'a>>
-    where
-        W: 'a,
-    {
-        let writer: Box<dyn AsyncWrite + Unpin + 'a> = Box::new(self.writer);
-        ArrayFuture {
-            writer,
-            len: self.len,
-        }
-    }
-
-    unsafe fn writer_from_dyn<'a>(writer: Box<dyn AsyncWrite + Unpin + 'a>) -> W
-    where
-        W: 'a,
-    {
-        // This is what Box::downcast() does. Could use something like the
-        // "mopa" crate. The unsafe risk is that the Boxed writer we get back W.
-        *Box::from_raw(Box::into_raw(writer) as *mut W)
+        Ok(self.end())
     }
 }
 
@@ -738,12 +738,36 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
         self.len == 0
     }
 
+    /// Return the underlying writer from this `MapFuture` that has already
+    /// written all elements (len == 0).
+    ///
+    /// #Panics
+    ///
+    /// Panics if self.is_empty() is false. `next()` must have been called as
+    /// many times as the map length originally written before calling this to
+    /// destroy the array wrapper.
+    pub fn end(self) -> W {
+        assert!(self.is_empty());
+        self.writer
+    }
+
     pub fn next_key(mut self) -> MsgPackOption<MsgPackWriter<MsgPackWriter<Self>>, W> {
         if self.len > 0 {
             self.len -= 1;
             MsgPackOption::Some(MsgPackWriter::new(MsgPackWriter::new(self)))
         } else {
             MsgPackOption::End(self.writer)
+        }
+    }
+
+    pub fn next_key_dyn(
+        &mut self,
+    ) -> Option<MsgPackWriter<MsgPackWriter<&mut (dyn AsyncWrite + Unpin)>>> {
+        if self.len > 0 {
+            self.len -= 1;
+            Some(MsgPackWriter::new(MsgPackWriter::new(self)))
+        } else {
+            None
         }
     }
 
@@ -757,38 +781,16 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
         }
     }
 
-    async fn write_value(self, a: &[(Value, Value)]) -> IoResult<W> {
-        let mut m = self.into_dyn();
+    async fn write_value(mut self, a: &[(Value, Value)]) -> IoResult<W> {
         for (k, v) in a {
-            m = m
-                .next_key()
+            self.next_key_dyn()
                 .unwrap()
                 .write_value_dyn(k)
                 .await?
                 .write_value_dyn(v)
                 .await?;
         }
-        Ok(unsafe { Self::writer_from_dyn(m.next_key().unwrap_end()) })
-    }
-
-    pub fn into_dyn<'a>(self) -> MapFuture<Box<dyn AsyncWrite + Unpin + 'a>>
-    where
-        W: 'a,
-    {
-        let writer: Box<dyn AsyncWrite + Unpin + 'a> = Box::new(self.writer);
-        MapFuture {
-            writer,
-            len: self.len,
-        }
-    }
-
-    pub unsafe fn writer_from_dyn<'a>(writer: Box<dyn AsyncWrite + Unpin + 'a>) -> W
-    where
-        W: 'a,
-    {
-        // This is what Box::downcast() does. Could use something like the
-        // "mopa" crate. The unsafe risk is that the Boxed writer we get back W.
-        *Box::from_raw(Box::into_raw(writer) as *mut W)
+        Ok(self.end())
     }
 }
 
