@@ -772,7 +772,7 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
         Ok(unsafe { Self::writer_from_dyn(m.next_key().unwrap_end()) })
     }
 
-    fn into_dyn<'a>(self) -> MapFuture<Box<dyn AsyncWrite + Unpin + 'a>>
+    pub fn into_dyn<'a>(self) -> MapFuture<Box<dyn AsyncWrite + Unpin + 'a>>
     where
         W: 'a,
     {
@@ -783,7 +783,7 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
         }
     }
 
-    unsafe fn writer_from_dyn<'a>(writer: Box<dyn AsyncWrite + Unpin + 'a>) -> W
+    pub unsafe fn writer_from_dyn<'a>(writer: Box<dyn AsyncWrite + Unpin + 'a>) -> W
     where
         W: 'a,
     {
