@@ -738,10 +738,10 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
         self.len == 0
     }
 
-    pub fn next_key(mut self) -> MsgPackOption<MsgPackWriter<MapValueFuture<W>>, W> {
+    pub fn next_key(mut self) -> MsgPackOption<MsgPackWriter<MsgPackWriter<Self>>, W> {
         if self.len > 0 {
             self.len -= 1;
-            MsgPackOption::Some(MsgPackWriter::new(MapValueFuture { writer: self }))
+            MsgPackOption::Some(MsgPackWriter::new(MsgPackWriter::new(self)))
         } else {
             MsgPackOption::End(self.writer)
         }
@@ -765,7 +765,6 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
                 .unwrap()
                 .write_value_dyn(k)
                 .await?
-                .next_value()
                 .write_value_dyn(v)
                 .await?;
         }
@@ -931,7 +930,7 @@ mod tests {
             let f = msg
                 .write_map_len(1)
                 .and_then(|m| m.next_key().unwrap().write_int(1))
-                .and_then(|m| m.next_value().write_int(2));
+                .and_then(|m| m.write_int(2));
             (
                 Some(Value::Map(vec![(1.into(), 2.into())])),
                 run_future(f).unwrap().next_key().unwrap_end(),
