@@ -2,10 +2,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::io::Result as IoResult;
+use futures::lock::{Mutex, MutexGuard};
 use futures::prelude::*;
 
 use super::encode::RpcSink;
-use crate::mutex::{Mutex, MutexGuard};
 
 pub struct SharedRpcSink<W> {
     writer: Mutex<W>,
@@ -18,23 +18,26 @@ impl<W: AsyncWrite + Unpin> SharedRpcSink<W> {
         }
     }
 
-    pub fn lock(&self) -> impl Future<Output = RpcSink<MutexGuard<W>>> {
+    pub fn lock(&self) -> impl Future<Output = RpcSink<RpcMutexGuard<W>>> {
         // Lock the writer and wrap it in an RpcSink
-        self.writer.lock().map(RpcSink::new)
+        self.writer.lock().map(RpcMutexGuard).map(RpcSink::new)
     }
 }
 
-impl<'a, W: AsyncWrite + Unpin> AsyncWrite for MutexGuard<'a, W> {
+/// Newtype for implementing AsyncWrite for `MutexGuard<W>`
+pub struct RpcMutexGuard<'a, W>(MutexGuard<'a, W>);
+
+impl<'a, W: AsyncWrite + Unpin> AsyncWrite for RpcMutexGuard<'a, W> {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<IoResult<usize>> {
-        W::poll_write(Pin::new(&mut self.as_mut()), cx, buf)
+        W::poll_write(Pin::new(&mut self.as_mut().0), cx, buf)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<IoResult<()>> {
-        W::poll_flush(Pin::new(&mut self.as_mut()), cx)
+        W::poll_flush(Pin::new(&mut self.as_mut().0), cx)
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<IoResult<()>> {
-        W::poll_close(Pin::new(&mut self.as_mut()), cx)
+        W::poll_close(Pin::new(&mut self.as_mut().0), cx)
     }
 }
 

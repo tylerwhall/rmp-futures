@@ -1,5 +1,6 @@
 use std::convert::TryFrom;
 use std::pin::Pin;
+use std::sync::Mutex;
 use std::task::{Context, Poll};
 
 use futures::channel::oneshot::{channel, Receiver, Sender};
@@ -11,7 +12,6 @@ use super::MsgId;
 use crate::decode::{ValueFuture, WrapReader};
 
 use slab::Slab;
-use spin::Mutex as SpinMutex;
 
 pub type ResponseSender<R> = Sender<SentResult<R>>;
 pub type ResponseReceiver<R> = Receiver<SentResult<R>>;
@@ -22,13 +22,13 @@ pub type ResponseReceiver<R> = Receiver<SentResult<R>>;
 /// guaranteeing they are unique. The item in the slab is a channel to send
 /// ownership of the reader to the sender of the request. It also contains a
 /// channel to send ownership back when the response has been read.
-pub struct RequestDispatch<R>(SpinMutex<Slab<ResponseSender<R>>>);
+pub struct RequestDispatch<R>(Mutex<Slab<ResponseSender<R>>>);
 
 impl<R> Default for RequestDispatch<R> {
     fn default() -> Self {
         // Start with 0 capacity in the slab to use no memory if this is used as
         // a server only
-        RequestDispatch(SpinMutex::new(Slab::new()))
+        RequestDispatch(Mutex::new(Slab::new()))
     }
 }
 
@@ -37,7 +37,7 @@ impl<R> RequestDispatch<R> {
     /// receive the response.
     pub fn new_request(&self) -> (MsgId, ResponseReceiver<R>) {
         let (sender, receiver) = channel();
-        let key = self.0.lock().insert(sender);
+        let key = self.0.lock().unwrap().insert(sender);
         // request ids are supposed to be 32-bit. On a 64-bit machine, there
         // could technically be an overflow, but only if 2^32 outstanding
         // requests already exist.
@@ -47,7 +47,7 @@ impl<R> RequestDispatch<R> {
 
     fn remove(&self, id: MsgId) -> Option<ResponseSender<R>> {
         let key = u32::from(id) as usize;
-        let mut slab = self.0.lock();
+        let mut slab = self.0.lock().unwrap();
         if slab.contains(key) {
             Some(slab.remove(key))
         } else {
