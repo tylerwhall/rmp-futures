@@ -484,6 +484,16 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
     }
 }
 
+impl<R: AsyncRead + Unpin> AsyncRead for MsgPackFuture<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
+        R::poll_read(Pin::new(&mut self.as_mut().reader), cx, buf)
+    }
+}
+
 #[derive(Debug)]
 pub struct ArrayFuture<R> {
     reader: R,
@@ -663,10 +673,10 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
         self.len == 0
     }
 
-    pub fn next_key(mut self) -> MsgPackOption<MsgPackFuture<MapValueFuture<R>>, R> {
+    pub fn next_key(mut self) -> MsgPackOption<MsgPackFuture<MsgPackFuture<Self>>, R> {
         if self.len > 0 {
             self.len -= 1;
-            MsgPackOption::Some(MsgPackFuture::new(MapValueFuture { reader: self }))
+            MsgPackOption::Some(MsgPackFuture::new(MsgPackFuture::new(self)))
         } else {
             MsgPackOption::End(self.reader)
         }
@@ -685,7 +695,7 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
             match map.next_key() {
                 MsgPackOption::Some(m) => {
                     let val = m.skip_dyn().await?;
-                    map = val.next_value().skip_dyn().await?;
+                    map = val.skip_dyn().await?;
                 }
                 MsgPackOption::End(r) => {
                     break Ok(unsafe { Self::reader_from_dyn(r) });
@@ -704,7 +714,7 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
             match map.next_key() {
                 MsgPackOption::Some(m) => {
                     let (key, val) = m.into_value_dyn().await?;
-                    let (val, next) = val.next_value().into_value_dyn().await?;
+                    let (val, next) = val.into_value_dyn().await?;
                     v.push((key, val));
                     map = next;
                 }
@@ -732,27 +742,6 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
         // from into_value() could be different than R, so `into_reader()` must
         // uphold this.
         *Box::from_raw(Box::into_raw(reader) as *mut R)
-    }
-}
-
-#[derive(Debug)]
-pub struct MapValueFuture<R> {
-    reader: MapFuture<R>,
-}
-
-impl<R: AsyncRead + Unpin> AsyncRead for MapValueFuture<R> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<IoResult<usize>> {
-        MapFuture::poll_read(Pin::new(&mut self.as_mut().reader), cx, buf)
-    }
-}
-
-impl<R: AsyncRead + Unpin> MapValueFuture<R> {
-    pub fn next_value(self) -> MsgPackFuture<MapFuture<R>> {
-        MsgPackFuture::new(self.reader)
     }
 }
 
@@ -1093,7 +1082,7 @@ mod test {
 
             while let MsgPackOption::Some(elem) = map.next_key() {
                 let (key, r) = elem.decode().await?.into_u64().unwrap();
-                let (val, m) = r.next_value().decode().await?.into_u64().unwrap();
+                let (val, m) = r.decode().await?.into_u64().unwrap();
                 vec.push((key, val));
                 map = m;
             }
