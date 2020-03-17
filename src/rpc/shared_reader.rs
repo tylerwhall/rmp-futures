@@ -56,7 +56,7 @@ impl<R> RequestDispatch<R> {
     }
 }
 
-impl<R: AsyncRead + Unpin + 'static> RequestDispatch<R> {
+impl<R: AsyncRead + Unpin + Send + 'static> RequestDispatch<R> {
     async fn dispatch_one(&self, rsp: RpcResponseFuture<RpcStream<R>>) -> IoResult<RpcStream<R>> {
         let id = rsp.id();
         if let Some(sender) = self.remove(id) {

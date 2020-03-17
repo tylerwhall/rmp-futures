@@ -254,7 +254,10 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         Ok(BigEndian::read_f64(&self.read_8().await?))
     }
 
-    pub async fn skip(self) -> IoResult<R> {
+    pub async fn skip(self) -> IoResult<R>
+    where
+        R: Send,
+    {
         let val = self.decode().await?;
         Ok(match val {
             ValueFuture::Nil(r) => r,
@@ -270,11 +273,11 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         })
     }
 
-    pub fn skip_dyn<'a>(self) -> Pin<Box<dyn Future<Output = IoResult<R>> + 'a>>
+    pub fn skip_dyn<'a>(self) -> Pin<Box<dyn Future<Output = IoResult<R>> + Send + 'a>>
     where
-        R: 'a,
+        R: Send + 'a,
     {
-        self.skip().boxed_local()
+        self.skip().boxed()
     }
 
     pub async fn decode(mut self) -> IoResult<ValueFuture<R>> {
@@ -465,7 +468,10 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
     }
 
     /// Read an entire message into a heap-allocated dynamic `Value`
-    pub async fn into_value(self) -> IoResult<(Value, R)> {
+    pub async fn into_value(self) -> IoResult<(Value, R)>
+    where
+        R: Send,
+    {
         // Boxing the future is necessary for array and map which recurse.
         Ok(match self.decode().await? {
             ValueFuture::Nil(r) => (Value::Nil, r),
@@ -481,11 +487,13 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         })
     }
 
-    pub fn into_value_dyn<'a>(self) -> Pin<Box<(dyn Future<Output = IoResult<(Value, R)>> + 'a)>>
+    pub fn into_value_dyn<'a>(
+        self,
+    ) -> Pin<Box<(dyn Future<Output = IoResult<(Value, R)>> + Send + 'a)>>
     where
-        R: 'a,
+        R: Send + 'a,
     {
-        self.into_value().boxed_local()
+        self.into_value().boxed()
     }
 }
 
@@ -545,7 +553,12 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
     }
 
     #[must_use]
-    pub fn next_dyn<'a>(&'a mut self) -> Option<MsgPackFuture<&'a mut (dyn AsyncRead + Unpin)>> {
+    pub fn next_dyn<'a>(
+        &'a mut self,
+    ) -> Option<MsgPackFuture<&'a mut (dyn AsyncRead + Unpin + Send)>>
+    where
+        R: Send,
+    {
         if self.len > 0 {
             self.len -= 1;
             Some(MsgPackFuture::new(&mut self.reader))
@@ -565,7 +578,10 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
     }
 
     /// Consume all remaining elements and return the underlying reader
-    pub async fn skip(mut self) -> IoResult<R> {
+    pub async fn skip(mut self) -> IoResult<R>
+    where
+        R: Send,
+    {
         if self.is_empty() {
             return Ok(self.reader);
         }
@@ -575,7 +591,10 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
         Ok(self.reader)
     }
 
-    pub async fn into_value_vec(mut self) -> IoResult<(Vec<Value>, R)> {
+    pub async fn into_value_vec(mut self) -> IoResult<(Vec<Value>, R)>
+    where
+        R: Send,
+    {
         let mut v = Vec::with_capacity(self.len());
         while let Some(m) = self.next_dyn() {
             let (value, _) = m.into_value_dyn().await?;
@@ -584,7 +603,10 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
         Ok((v, self.reader))
     }
 
-    pub fn into_value(self) -> impl Future<Output = IoResult<(Value, R)>> {
+    pub fn into_value(self) -> impl Future<Output = IoResult<(Value, R)>>
+    where
+        R: Send,
+    {
         self.into_value_vec().map_ok(|(v, r)| (Value::Array(v), r))
     }
 }
@@ -594,7 +616,10 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
 pub struct FinalizedArray<R>(ArrayFuture<R>);
 
 impl<R: AsyncRead + Unpin + 'static> FinalizedArray<R> {
-    pub async fn finish(self) -> IoResult<R> {
+    pub async fn finish(self) -> IoResult<R>
+    where
+        R: Send,
+    {
         self.0.skip().await
     }
 }
@@ -657,7 +682,10 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
     #[must_use]
     pub fn next_key_dyn<'a>(
         &'a mut self,
-    ) -> Option<MsgPackFuture<MsgPackFuture<&'a mut (dyn AsyncRead + Unpin)>>> {
+    ) -> Option<MsgPackFuture<MsgPackFuture<&'a mut (dyn AsyncRead + Unpin + Send)>>>
+    where
+        R: Send,
+    {
         if self.len > 0 {
             self.len -= 1;
             Some(MsgPackFuture::new(MsgPackFuture::new(&mut self.reader)))
@@ -667,7 +695,10 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
     }
 
     /// Consume all remaining elements and return the underlying reader
-    pub async fn skip(mut self) -> IoResult<R> {
+    pub async fn skip(mut self) -> IoResult<R>
+    where
+        R: Send,
+    {
         if self.is_empty() {
             return Ok(self.reader);
         }
@@ -678,7 +709,10 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
         Ok(self.reader)
     }
 
-    pub async fn into_value(mut self) -> IoResult<(Value, R)> {
+    pub async fn into_value(mut self) -> IoResult<(Value, R)>
+    where
+        R: Send,
+    {
         let mut v = Vec::with_capacity(self.len());
         while let Some(m) = self.next_key_dyn() {
             let (key, val) = m.into_value_dyn().await?;

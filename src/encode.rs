@@ -570,7 +570,10 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     ///
     /// Panics if array or map length exceeds 2^32-1
     #[must_use]
-    pub async fn write_value(self, value: &Value) -> IoResult<W> {
+    pub async fn write_value(self, value: &Value) -> IoResult<W>
+    where
+        W: Send,
+    {
         match value {
             Value::Nil => self.write_nil().await,
             Value::Boolean(val) => self.write_bool(*val).await,
@@ -603,11 +606,11 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     pub fn write_value_dyn<'a>(
         self,
         value: &'a Value,
-    ) -> Pin<Box<dyn Future<Output = IoResult<W>> + 'a>>
+    ) -> Pin<Box<dyn Future<Output = IoResult<W>> + Send + 'a>>
     where
-        W: 'a,
+        W: Send + 'a,
     {
-        self.write_value(value).boxed_local()
+        self.write_value(value).boxed()
     }
 }
 
@@ -696,7 +699,10 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
     /// Panics if self.is_empty() is true. `next()` must be called no more times
     /// than the array length originally written.
     #[must_use]
-    pub fn next_dyn(&mut self) -> MsgPackWriter<&mut (dyn AsyncWrite + Unpin)> {
+    pub fn next_dyn(&mut self) -> MsgPackWriter<&mut (dyn AsyncWrite + Send + Unpin)>
+    where
+        W: Send,
+    {
         assert!(!self.is_empty());
         self.len -= 1;
         MsgPackWriter::new(&mut self.writer)
@@ -718,7 +724,10 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
         MsgPackWriter::new(self.writer)
     }
 
-    async fn write_value(mut self, a: &[Value]) -> IoResult<W> {
+    async fn write_value(mut self, a: &[Value]) -> IoResult<W>
+    where
+        W: Send,
+    {
         for elem in a {
             self.next_dyn().write_value_dyn(elem).await?;
         }
@@ -780,7 +789,10 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
     #[must_use]
     pub fn next_key_dyn(
         &mut self,
-    ) -> Option<MsgPackWriter<MsgPackWriter<&mut (dyn AsyncWrite + Unpin)>>> {
+    ) -> Option<MsgPackWriter<MsgPackWriter<&mut (dyn AsyncWrite + Send + Unpin)>>>
+    where
+        W: Send,
+    {
         if self.len > 0 {
             self.len -= 1;
             Some(MsgPackWriter::new(MsgPackWriter::new(self)))
@@ -799,7 +811,10 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
         }
     }
 
-    async fn write_value(mut self, a: &[(Value, Value)]) -> IoResult<W> {
+    async fn write_value(mut self, a: &[(Value, Value)]) -> IoResult<W>
+    where
+        W: Send,
+    {
         for (k, v) in a {
             self.next_key_dyn()
                 .unwrap()

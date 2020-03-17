@@ -56,7 +56,7 @@ impl<R: AsyncRead + Unpin> RpcRequestFuture<R> {
 
     pub async fn skip(self) -> IoResult<R>
     where
-        R: 'static,
+        R: Send + 'static,
     {
         self.method()
             .await?
@@ -138,7 +138,7 @@ impl<R: AsyncRead + Unpin> RpcResponseFuture<R> {
     /// Consume this message and return the underlying reader
     pub fn skip(self) -> impl Future<Output = IoResult<R>>
     where
-        R: 'static,
+        R: Send + 'static,
     {
         self.array.skip()
     }
@@ -148,7 +148,7 @@ impl<R: AsyncRead + Unpin> RpcResponseFuture<R> {
 /// returning the underlying reader
 pub struct RpcResultFuture<R>(ArrayFuture<R>);
 
-impl<R: AsyncRead + Unpin + 'static> RpcResultFuture<R> {
+impl<R: AsyncRead + Unpin + Send + 'static> RpcResultFuture<R> {
     pub async fn finish(self) -> IoResult<R> {
         self.0.skip().await
     }
@@ -168,7 +168,7 @@ pub struct RpcNotifyFuture<R> {
     array: ArrayFuture<R>,
 }
 
-impl<R: AsyncRead + Unpin> RpcNotifyFuture<R> {
+impl<R: AsyncRead + Unpin + Send> RpcNotifyFuture<R> {
     pub async fn method(self) -> IoResult<StringFuture<RpcParamsFuture<R>>> {
         self.array
             .next()
@@ -204,6 +204,12 @@ pub struct RpcStream<R> {
 impl<R: AsyncRead + Unpin> RpcStream<R> {
     pub fn new(reader: R) -> Self {
         RpcStream { reader }
+    }
+
+    pub fn as_mut(&mut self) -> RpcStream<&mut R> {
+        RpcStream {
+            reader: &mut self.reader,
+        }
     }
 
     /// Helper used for request and response to read the msgid field
