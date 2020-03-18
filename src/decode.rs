@@ -14,6 +14,8 @@ use futures::prelude::*;
 
 use crate::MsgPackOption;
 
+type DynIoResultFuture<'a, T> = dyn Future<Output = IoResult<T>> + Send + 'a;
+
 pub(crate) trait WrapReader<R, R2> {
     type Output;
 
@@ -273,7 +275,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         })
     }
 
-    pub fn skip_dyn<'a>(self) -> Pin<Box<dyn Future<Output = IoResult<R>> + Send + 'a>>
+    pub fn skip_dyn<'a>(self) -> Pin<Box<DynIoResultFuture<'a, R>>>
     where
         R: Send + 'a,
     {
@@ -487,9 +489,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         })
     }
 
-    pub fn into_value_dyn<'a>(
-        self,
-    ) -> Pin<Box<(dyn Future<Output = IoResult<(Value, R)>> + Send + 'a)>>
+    pub fn into_value_dyn<'a>(self) -> Pin<Box<DynIoResultFuture<'a, (Value, R)>>>
     where
         R: Send + 'a,
     {
