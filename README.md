@@ -47,7 +47,9 @@ memory, but also allows easier transition from other libraries that use
 
 ## TODO
 
-- RpcMessage::Request should produce a handle to be used to send the message back. Needs to remember the id and contain a shared reference to the writer (layer above).
+- RpcMessage::Request should produce a handle to be used to send the message
+  back. Currently the client has to save the id and use the correct one when
+  starting the response message.
 
 ## License
 
