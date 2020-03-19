@@ -1,4 +1,6 @@
-# rmp-futures
+# rmp-futures - Async Rust MessagePack and MessagePack-RPC
+
+[![Build Status](https://travis-ci.com/tylerwhall/rmp-futures.svg?branch=master)](https://travis-ci.com/github/tylerwhall/rmp-futures)
 
 Async encode/decode for msgpack and msgpack-rpc. Intended to allow
 deterministic memory use, making the client responsible for allocation. Since
