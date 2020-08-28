@@ -7,6 +7,7 @@ use futures::prelude::*;
 
 use super::encode::RpcSink;
 
+#[derive(Debug)]
 pub struct SharedRpcSink<W> {
     writer: Mutex<W>,
 }
