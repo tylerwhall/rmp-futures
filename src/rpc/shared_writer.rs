@@ -23,6 +23,11 @@ impl<W: AsyncWrite + Unpin> SharedRpcSink<W> {
         // Lock the writer and wrap it in an RpcSink
         self.writer.lock().map(RpcMutexGuard).map(RpcSink::new)
     }
+
+    /// Consumes this `SharedRpcSink`, returning the underlying writer.
+    pub fn into_inner(self) -> W {
+        self.writer.into_inner()
+    }
 }
 
 /// Newtype for implementing AsyncWrite for `MutexGuard<W>`
