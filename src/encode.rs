@@ -803,9 +803,9 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
 
     /// If this is the last element, return a future of it's value wrapped around the
     /// underlying writer. Avoids having to call `next()` a final time.
-    pub fn last(self) -> MsgPackOption<MsgPackWriter<W>, W> {
+    pub fn last_key(self) -> MsgPackOption<MsgPackWriter<MsgPackWriter<W>>, W> {
         if self.len == 1 {
-            MsgPackOption::Some(MsgPackWriter::new(self.writer))
+            MsgPackOption::Some(MsgPackWriter::new(MsgPackWriter::new(self.writer)))
         } else {
             MsgPackOption::End(self.writer)
         }
