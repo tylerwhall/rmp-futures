@@ -160,6 +160,26 @@ impl<R> ValueFuture<R> {
             ValueFuture::Ext(e) => e.skip().await?,
         })
     }
+
+    /// Read an entire message into a heap-allocated dynamic `Value`
+    pub async fn into_value(self) -> IoResult<(Value, R)>
+    where
+        R: AsyncRead + Send + Unpin,
+    {
+        // Boxing the future is necessary for array and map which recurse.
+        Ok(match self {
+            ValueFuture::Nil(r) => (Value::Nil, r),
+            ValueFuture::Boolean(b, r) => (Value::Boolean(b), r),
+            ValueFuture::Integer(i, r) => (Value::Integer(i), r),
+            ValueFuture::F32(f, r) => (Value::F32(f), r),
+            ValueFuture::F64(f, r) => (Value::F64(f), r),
+            ValueFuture::Array(a) => a.into_value().await?,
+            ValueFuture::Map(m) => m.into_value().await?,
+            ValueFuture::Bin(m) => m.into_value().await?,
+            ValueFuture::String(s) => s.into_value().await?,
+            ValueFuture::Ext(e) => e.into_value().await?,
+        })
+    }
 }
 
 #[must_use]
@@ -481,18 +501,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         R: Send,
     {
         // Boxing the future is necessary for array and map which recurse.
-        Ok(match self.decode().await? {
-            ValueFuture::Nil(r) => (Value::Nil, r),
-            ValueFuture::Boolean(b, r) => (Value::Boolean(b), r),
-            ValueFuture::Integer(i, r) => (Value::Integer(i), r),
-            ValueFuture::F32(f, r) => (Value::F32(f), r),
-            ValueFuture::F64(f, r) => (Value::F64(f), r),
-            ValueFuture::Array(a) => a.into_value().await?,
-            ValueFuture::Map(m) => m.into_value().await?,
-            ValueFuture::Bin(m) => m.into_value().await?,
-            ValueFuture::String(s) => s.into_value().await?,
-            ValueFuture::Ext(e) => e.into_value().await?,
-        })
+        self.decode().await?.into_value().await
     }
 
     pub fn into_value_dyn<'a>(self) -> Pin<Box<DynIoResultFuture<'a, (Value, R)>>>
