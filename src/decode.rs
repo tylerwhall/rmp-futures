@@ -142,6 +142,24 @@ impl<R> ValueFuture<R> {
             None
         }
     }
+
+    pub async fn skip(self) -> IoResult<R>
+    where
+        R: AsyncRead + Send + Unpin,
+    {
+        Ok(match self {
+            ValueFuture::Nil(r) => r,
+            ValueFuture::Boolean(_b, r) => r,
+            ValueFuture::Integer(_i, r) => r,
+            ValueFuture::F32(_f, r) => r,
+            ValueFuture::F64(_f, r) => r,
+            ValueFuture::Array(a) => a.skip().await?,
+            ValueFuture::Map(m) => m.skip().await?,
+            ValueFuture::Bin(m) => m.skip().await?,
+            ValueFuture::String(s) => s.skip().await?,
+            ValueFuture::Ext(e) => e.skip().await?,
+        })
+    }
 }
 
 #[must_use]
@@ -260,19 +278,7 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
     where
         R: Send,
     {
-        let val = self.decode().await?;
-        Ok(match val {
-            ValueFuture::Nil(r) => r,
-            ValueFuture::Boolean(_b, r) => r,
-            ValueFuture::Integer(_i, r) => r,
-            ValueFuture::F32(_f, r) => r,
-            ValueFuture::F64(_f, r) => r,
-            ValueFuture::Array(a) => a.skip().await?,
-            ValueFuture::Map(m) => m.skip().await?,
-            ValueFuture::Bin(m) => m.skip().await?,
-            ValueFuture::String(s) => s.skip().await?,
-            ValueFuture::Ext(e) => e.skip().await?,
-        })
+        self.decode().await?.skip().await
     }
 
     pub fn skip_dyn<'a>(self) -> Pin<Box<DynIoResultFuture<'a, R>>>
