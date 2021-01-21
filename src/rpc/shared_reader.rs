@@ -8,8 +8,10 @@ use futures::io::Result as IoResult;
 use futures::prelude::*;
 
 use super::decode::{RpcMessage, RpcNotifyFuture, RpcRequestFuture, RpcResponseFuture, RpcStream};
+use super::encode::RpcSink;
 use super::MsgId;
 use crate::decode::{ValueFuture, WrapReader};
+use crate::encode::ArrayFuture;
 
 use slab::Slab;
 
@@ -33,16 +35,25 @@ impl<R> Default for RequestDispatch<R> {
 }
 
 impl<R> RequestDispatch<R> {
-    /// Allocate a new pending request. Returns the request id and a future to
-    /// receive the response.
-    pub fn new_request(&self) -> (MsgId, ResponseReceiver<R>) {
+    /// Write a request and associate it with an id.
+    ///
+    /// Returns the writer for arguments and a future to receive the response.
+    pub async fn write_request<W: AsyncWrite + Unpin>(
+        &self,
+        sink: RpcSink<W>,
+        method: impl AsRef<str>,
+        num_args: u32,
+    ) -> (IoResult<ArrayFuture<RpcSink<W>>>, ResponseReceiver<R>) {
         let (sender, receiver) = channel();
         let key = self.0.lock().unwrap().insert(sender);
         // request ids are supposed to be 32-bit. On a 64-bit machine, there
         // could technically be an overflow, but only if 2^32 outstanding
         // requests already exist.
         let key = u32::try_from(key).expect("too many concurrent requests");
-        (key.into(), receiver)
+        (
+            sink.write_request(key.into(), method, num_args).await,
+            receiver,
+        )
     }
 
     fn remove(&self, id: MsgId) -> Option<ResponseSender<R>> {

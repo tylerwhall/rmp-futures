@@ -28,13 +28,11 @@ fn main() -> io::Result<()> {
             })
             .unwrap();
 
-        let (id, reply1) = dispatch.new_request();
-        let args = sink.write_request(id, "hello", 1).await?;
-        let sink = args.last().write_str("Bob").await?;
+        let (args, reply1) = dispatch.write_request(sink, "hello", 1).await;
+        let sink = args?.last().write_str("Bob").await?;
 
-        let (id, reply2) = dispatch.new_request();
-        let args = sink.write_request(id, "hello", 1).await?;
-        let _sink = args.last().write_str("Bob").await?;
+        let (args, reply2) = dispatch.write_request(sink, "hello", 1).await;
+        let _sink = args?.last().write_str("Bob").await?;
 
         async fn print_reply(reply: ResponseReceiver<impl AsyncRead + Unpin>) {
             match reply.await.unwrap() {
