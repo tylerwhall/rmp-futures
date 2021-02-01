@@ -265,6 +265,34 @@ impl<R: AsyncRead + Unpin> RpcStream<R> {
             )),
         }
     }
+
+    /// Consume all messages until encountering a reply with the given id
+    pub async fn wait_for_reply(
+        mut self,
+        msgid: MsgId,
+    ) -> IoResult<
+        Result<
+            ValueFuture<RpcResultFuture<RpcStream<R>>>,
+            ValueFuture<RpcResultFuture<RpcStream<R>>>,
+        >,
+    >
+    where
+        R: Send + 'static,
+    {
+        loop {
+            self = match self.next().await? {
+                RpcMessage::Request(req) => req.skip().await?,
+                RpcMessage::Response(rsp) => {
+                    if rsp.id() == msgid {
+                        return rsp.result().await;
+                    } else {
+                        rsp.skip().await?
+                    }
+                }
+                RpcMessage::Notify(nfy) => nfy.skip().await?,
+            }
+        }
+    }
 }
 
 impl<R: AsyncRead + Unpin> AsyncRead for RpcStream<R> {
