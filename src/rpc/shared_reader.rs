@@ -9,14 +9,14 @@ use futures::prelude::*;
 
 use super::decode::{RpcMessage, RpcNotifyFuture, RpcRequestFuture, RpcResponseFuture, RpcStream};
 use super::encode::RpcSink;
-use super::MsgId;
+use super::{MsgId, ResponseResult};
 use crate::decode::{ValueFuture, WrapReader};
 use crate::encode::ArrayFuture;
 
 use slab::Slab;
 
-pub type ResponseSender<R> = Sender<SentResult<R>>;
-pub type ResponseReceiver<R> = Receiver<SentResult<R>>;
+pub type ResponseSender<R> = Sender<ResponseResult<R>>;
+pub type ResponseReceiver<R> = Receiver<ResponseResult<R>>;
 
 /// Tracks outstanding requests.
 ///
@@ -154,10 +154,6 @@ impl<R: AsyncRead + Unpin + Send + 'static> RequestDispatch<R> {
     }
 }
 
-type SentValueFuture<R> = ValueFuture<RpcResultFuture<R>>;
-/// What we send to the client waiting on a method result
-type SentResult<R> = Result<SentValueFuture<R>, SentValueFuture<R>>;
-
 struct RpcResultFutureInner<R> {
     /// Underlying reader to get the value
     result: super::decode::RpcResultFuture<RpcStream<R>>,
@@ -176,7 +172,7 @@ impl<R: AsyncRead + Unpin> RpcResultFuture<R> {
 
     fn from_result(
         result: Result<ValueFuture<StreamResultFuture<R>>, ValueFuture<StreamResultFuture<R>>>,
-    ) -> (SentResult<R>, Receiver<StreamResultFuture<R>>) {
+    ) -> (ResponseResult<R>, Receiver<StreamResultFuture<R>>) {
         // Channel for sending the reader back
         let (sender, receiver) = channel();
         (

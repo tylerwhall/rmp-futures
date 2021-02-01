@@ -6,7 +6,12 @@ mod shared_writer;
 pub use shared_reader::{RequestDispatch, ResponseReceiver, RpcIncomingMessage};
 pub use shared_writer::SharedRpcSink;
 
+use crate::decode::ValueFuture;
 use crate::encode::EfficientInt;
+use shared_reader::RpcResultFuture;
+
+pub type ResponseResult<R> =
+    Result<ValueFuture<RpcResultFuture<R>>, ValueFuture<RpcResultFuture<R>>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MsgId(u32);
