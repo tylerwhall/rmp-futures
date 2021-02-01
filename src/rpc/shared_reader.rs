@@ -24,7 +24,7 @@ pub type ResponseReceiver<R> = Receiver<SentResult<R>>;
 /// guaranteeing they are unique. The item in the slab is a channel to send
 /// ownership of the reader to the sender of the request. It also contains a
 /// channel to send ownership back when the response has been read.
-pub struct RequestDispatch<R>(Mutex<Slab<ResponseSender<R>>>);
+pub struct RequestDispatch<R>(Mutex<Slab<Option<ResponseSender<R>>>>);
 
 impl<R> Default for RequestDispatch<R> {
     fn default() -> Self {
@@ -45,18 +45,40 @@ impl<R> RequestDispatch<R> {
         num_args: u32,
     ) -> (IoResult<ArrayFuture<RpcSink<W>>>, ResponseReceiver<R>) {
         let (sender, receiver) = channel();
+        let writer = self
+            ._write_request(sink, method, num_args, Some(sender))
+            .await;
+        (writer, receiver)
+    }
+
+    /// Write a request and associate it with an id. Corresponding response is ignored.
+    ///
+    /// Returns the writer for arguments
+    pub async fn write_request_norsp<W: AsyncWrite + Unpin>(
+        &self,
+        sink: RpcSink<W>,
+        method: impl AsRef<str>,
+        num_args: u32,
+    ) -> IoResult<ArrayFuture<RpcSink<W>>> {
+        self._write_request(sink, method, num_args, None).await
+    }
+
+    async fn _write_request<W: AsyncWrite + Unpin>(
+        &self,
+        sink: RpcSink<W>,
+        method: impl AsRef<str>,
+        num_args: u32,
+        sender: Option<ResponseSender<R>>,
+    ) -> IoResult<ArrayFuture<RpcSink<W>>> {
         let key = self.0.lock().unwrap().insert(sender);
         // request ids are supposed to be 32-bit. On a 64-bit machine, there
         // could technically be an overflow, but only if 2^32 outstanding
         // requests already exist.
         let key = u32::try_from(key).expect("too many concurrent requests");
-        (
-            sink.write_request(key.into(), method, num_args).await,
-            receiver,
-        )
+        sink.write_request(key.into(), method, num_args).await
     }
 
-    fn remove(&self, id: MsgId) -> Option<ResponseSender<R>> {
+    fn remove(&self, id: MsgId) -> Option<Option<ResponseSender<R>>> {
         let key = u32::from(id) as usize;
         let mut slab = self.0.lock().unwrap();
         if slab.contains(key) {
@@ -70,28 +92,35 @@ impl<R> RequestDispatch<R> {
 impl<R: AsyncRead + Unpin + Send + 'static> RequestDispatch<R> {
     async fn dispatch_one(&self, rsp: RpcResponseFuture<RpcStream<R>>) -> IoResult<RpcStream<R>> {
         let id = rsp.id();
-        if let Some(sender) = self.remove(id) {
-            // Decode the message to get an Ok/Err result
-            let result = rsp.result().await?;
-            let (result, receiver) = RpcResultFuture::from_result(result);
-            if let Err(_r) = sender.send(result) {
-                println!("Got unsolicitied response {:?} (receiver dead)", id);
-                // If the receiver was dropped, we get the
-                // result back. Dropping it here will
-                // complete our receiver just as if the
-                // client code received it and dropped it.
+        match self.remove(id) {
+            Some(Some(sender)) => {
+                // Decode the message to get an Ok/Err result
+                let result = rsp.result().await?;
+                let (result, receiver) = RpcResultFuture::from_result(result);
+                if let Err(_r) = sender.send(result) {
+                    println!("Got unsolicitied response {:?} (receiver dead)", id);
+                    // If the receiver was dropped, we get the
+                    // result back. Dropping it here will
+                    // complete our receiver just as if the
+                    // client code received it and dropped it.
+                }
+                // oneshot::Canceled should not be possible
+                // because drop on RpcResultFuture always sends
+                // to the sender before the sender is dropped.
+                let result = receiver.await.expect("reader not returned");
+                // Consume the rest of the message if the client did not
+                result.finish().await
             }
-            // oneshot::Canceled should not be possible
-            // because drop on RpcResultFuture always sends
-            // to the sender before the sender is dropped.
-            let result = receiver.await.expect("reader not returned");
-            // Consume the rest of the message if the client did not
-            result.finish().await
-        } else {
-            // TODO: error! from log crate
-            println!("Got unsolicitied response {:?}", id);
-            // Consume this message and loop
-            rsp.skip().await
+            Some(None) => {
+                // Message exists, but nothing waiting on response. Drop it.
+                rsp.skip().await
+            }
+            None => {
+                // TODO: error! from log crate
+                println!("Got unsolicitied response {:?}", id);
+                // Consume this message and loop
+                rsp.skip().await
+            }
         }
     }
 
