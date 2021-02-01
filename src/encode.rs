@@ -724,7 +724,7 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
         MsgPackWriter::new(self.writer)
     }
 
-    async fn write_value(mut self, a: &[Value]) -> IoResult<W>
+    pub async fn write_value(mut self, a: &[Value]) -> IoResult<W>
     where
         W: Send,
     {
@@ -811,7 +811,7 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
         }
     }
 
-    async fn write_value(mut self, a: &[(Value, Value)]) -> IoResult<W>
+    pub async fn write_value(mut self, a: &[(Value, Value)]) -> IoResult<W>
     where
         W: Send,
     {
