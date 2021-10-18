@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use rmp::Marker;
-use rmpv::Value;
+use rmpv::{Value, ValueRef};
 
 use byteorder::{BigEndian, ByteOrder};
 use futures::io::Result as IoResult;
@@ -574,22 +574,8 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     where
         W: Send,
     {
+        // `as_ref` for collections will re-alloc an array of ValueRef, so use the Value directly for those.
         match value {
-            Value::Nil => self.write_nil().await,
-            Value::Boolean(val) => self.write_bool(*val).await,
-            Value::Integer(val) => {
-                if let Some(val) = val.as_i64() {
-                    self.write_int(val).await
-                } else if let Some(val) = val.as_u64() {
-                    self.write_int(val).await
-                } else {
-                    unreachable!()
-                }
-            }
-            Value::F32(val) => self.write_f32(*val).await,
-            Value::F64(val) => self.write_f64(*val).await,
-            Value::String(val) => self.write_str_bytes(val.as_bytes()).await,
-            Value::Binary(val) => self.write_bin(val).await,
             Value::Array(a) => {
                 let w = self.write_array_len(a.len().try_into().unwrap()).await?;
                 w.write_value(a).await
@@ -598,7 +584,45 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
                 let w = self.write_map_len(m.len().try_into().unwrap()).await?;
                 w.write_value(m).await
             }
-            Value::Ext(ty, bytes) => self.write_ext(bytes, *ty).await,
+            _ => self.write_value_ref(&value.as_ref()).await,
+        }
+    }
+
+    /// Encodes and attempts to write a dynamic `rmpv::ValueRef`
+    ///
+    /// # Panics
+    ///
+    /// Panics if array or map length exceeds 2^32-1
+    #[must_use = "dropping the writer may leave the message unfinished"]
+    pub async fn write_value_ref(self, value: &ValueRef<'_>) -> IoResult<W>
+    where
+        W: Send,
+    {
+        match value {
+            ValueRef::Nil => self.write_nil().await,
+            ValueRef::Boolean(val) => self.write_bool(*val).await,
+            ValueRef::Integer(val) => {
+                if let Some(val) = val.as_i64() {
+                    self.write_int(val).await
+                } else if let Some(val) = val.as_u64() {
+                    self.write_int(val).await
+                } else {
+                    unreachable!()
+                }
+            }
+            ValueRef::F32(val) => self.write_f32(*val).await,
+            ValueRef::F64(val) => self.write_f64(*val).await,
+            ValueRef::String(val) => self.write_str_bytes(val.as_bytes()).await,
+            ValueRef::Binary(val) => self.write_bin(val).await,
+            ValueRef::Array(a) => {
+                let w = self.write_array_len(a.len().try_into().unwrap()).await?;
+                w.write_value_ref(a).await
+            }
+            ValueRef::Map(m) => {
+                let w = self.write_map_len(m.len().try_into().unwrap()).await?;
+                w.write_value_ref(m).await
+            }
+            ValueRef::Ext(ty, bytes) => self.write_ext(bytes, *ty).await,
         }
     }
 
@@ -611,6 +635,17 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
         W: Send + 'a,
     {
         self.write_value(value).boxed()
+    }
+
+    #[must_use = "dropping the writer may leave the message unfinished"]
+    pub fn write_value_ref_dyn<'a>(
+        self,
+        value: &'a ValueRef<'a>,
+    ) -> Pin<Box<dyn Future<Output = IoResult<W>> + Send + 'a>>
+    where
+        W: Send + 'a,
+    {
+        self.write_value_ref(value).boxed()
     }
 }
 
@@ -733,6 +768,16 @@ impl<W: AsyncWrite + Unpin> ArrayFuture<W> {
         }
         Ok(self.end())
     }
+
+    pub async fn write_value_ref(mut self, a: &[ValueRef<'_>]) -> IoResult<W>
+    where
+        W: Send,
+    {
+        for elem in a {
+            self.next_dyn().write_value_ref_dyn(elem).await?;
+        }
+        Ok(self.end())
+    }
 }
 
 #[derive(Debug)]
@@ -821,6 +866,21 @@ impl<W: AsyncWrite + Unpin> MapFuture<W> {
                 .write_value_dyn(k)
                 .await?
                 .write_value_dyn(v)
+                .await?;
+        }
+        Ok(self.end())
+    }
+
+    pub async fn write_value_ref<'a>(mut self, a: &[(ValueRef<'a>, ValueRef<'a>)]) -> IoResult<W>
+    where
+        W: Send,
+    {
+        for (k, v) in a {
+            self.next_key_dyn()
+                .unwrap()
+                .write_value_ref_dyn(k)
+                .await?
+                .write_value_ref_dyn(v)
                 .await?;
         }
         Ok(self.end())
