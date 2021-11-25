@@ -3,7 +3,7 @@ pub mod encode;
 mod shared_reader;
 mod shared_writer;
 
-pub use shared_reader::{RequestDispatch, ResponseReceiver, RpcIncomingMessage};
+pub use shared_reader::{RequestDispatch, ResponseReceiver, RpcIncomingMessage, RpcIteration};
 pub use shared_writer::SharedRpcSink;
 
 use crate::decode::ValueFuture;

@@ -135,20 +135,29 @@ impl<R: AsyncRead + Unpin + Send + 'static> RequestDispatch<R> {
         }
     }
 
+    /// Processes one incoming message
+    ///
+    /// For responses, internally dispatch and return the reader
+    /// For request/notify, return the `RpcIncomingMessage`
+    pub async fn turn(&self, stream: RpcStream<R>) -> IoResult<RpcIteration<RpcStream<R>>> {
+        match stream.next().await? {
+            RpcMessage::Request(req) => Ok(RpcIteration::Some(RpcIncomingMessage::Request(req))),
+            RpcMessage::Notify(nfy) => Ok(RpcIteration::Some(RpcIncomingMessage::Notify(nfy))),
+            RpcMessage::Response(rsp) => Ok(RpcIteration::None(self.dispatch_one(rsp).await?)),
+        }
+    }
+
     /// Dispatches responses and yields requests and notifies
+    ///
+    /// Like `turn()` but only returns after reading a request or notify
     pub async fn next(
         &self,
         mut stream: RpcStream<R>,
     ) -> IoResult<RpcIncomingMessage<RpcStream<R>>> {
         loop {
-            stream = match stream.next().await? {
-                RpcMessage::Request(req) => {
-                    return Ok(RpcIncomingMessage::Request(req));
-                }
-                RpcMessage::Notify(nfy) => {
-                    return Ok(RpcIncomingMessage::Notify(nfy));
-                }
-                RpcMessage::Response(rsp) => self.dispatch_one(rsp).await?,
+            stream = match self.turn(stream).await? {
+                RpcIteration::Some(ret) => return Ok(ret),
+                RpcIteration::None(stream) => stream,
             }
         }
     }
@@ -215,4 +224,11 @@ impl<R: AsyncRead + Unpin> AsyncRead for RpcResultFuture<R> {
 pub enum RpcIncomingMessage<R> {
     Request(RpcRequestFuture<R>),
     Notify(RpcNotifyFuture<R>),
+}
+
+/// For one iteration of `turn()`, represents an `RpcIncomingMessage` (request,
+/// notify) or a response that was dispatched internally.
+pub enum RpcIteration<R> {
+    Some(RpcIncomingMessage<R>),
+    None(R),
 }
