@@ -568,9 +568,7 @@ impl<R: AsyncRead + Unpin> ArrayFuture<R> {
     }
 
     #[must_use]
-    pub fn next_dyn<'a>(
-        &'a mut self,
-    ) -> Option<MsgPackFuture<&'a mut (dyn AsyncRead + Unpin + Send)>>
+    pub fn next_dyn(&mut self) -> Option<MsgPackFuture<&mut (dyn AsyncRead + Unpin + Send)>>
     where
         R: Send,
     {
@@ -695,9 +693,9 @@ impl<R: AsyncRead + Unpin> MapFuture<R> {
     }
 
     #[must_use]
-    pub fn next_key_dyn<'a>(
-        &'a mut self,
-    ) -> Option<MsgPackFuture<MsgPackFuture<&'a mut (dyn AsyncRead + Unpin + Send)>>>
+    pub fn next_key_dyn(
+        &mut self,
+    ) -> Option<MsgPackFuture<MsgPackFuture<&mut (dyn AsyncRead + Unpin + Send)>>>
     where
         R: Send,
     {
