@@ -782,10 +782,10 @@ impl<R: AsyncRead + Unpin> BinFuture<R> {
     }
 
     pub async fn read_all(mut self, buf: &mut [u8]) -> IoResult<R> {
-        self.read_exact(buf).await.map(|_| self.into_inner())
+        self.read_exact(buf).await.map(|_| self.end())
     }
 
-    pub fn into_inner(self) -> R {
+    pub fn end(self) -> R {
         assert_eq!(self.len, 0);
         self.reader
     }
