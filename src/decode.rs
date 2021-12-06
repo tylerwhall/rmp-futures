@@ -773,12 +773,16 @@ impl<R: AsyncRead + Unpin> BinFuture<R> {
         self.len == 0
     }
 
-    /// Panics if buf length is less than the value returned by `len()`
+    /// Panics if buf length is greater than bytes remaining
+    pub async fn read_exact(&mut self, buf: &mut [u8]) -> IoResult<()> {
+        assert!(buf.len() <= self.len);
+        self.reader.read_exact(buf).await.map(|_| {
+            self.len -= buf.len();
+        })
+    }
+
     pub async fn read_all(mut self, buf: &mut [u8]) -> IoResult<R> {
-        self.reader
-            .read_exact(&mut buf[..self.len])
-            .await
-            .map(|_| self.reader)
+        self.read_exact(buf).await.map(|_| self.into_inner())
     }
 
     pub fn into_inner(self) -> R {
@@ -822,6 +826,10 @@ impl<R: AsyncRead + Unpin> StringFuture<R> {
                 .map_err(|_| ErrorKind::InvalidData.into())
                 .map(|s| (s, r))
         })
+    }
+
+    pub async fn read_exact(&mut self, buf: &mut [u8]) -> IoResult<()> {
+        self.0.read_exact(buf).await
     }
 
     pub async fn read_all(self, buf: &mut [u8]) -> IoResult<R> {
@@ -878,6 +886,10 @@ impl<R: AsyncRead + Unpin> ExtFuture<R> {
     pub async fn into_vec(self) -> IoResult<(i8, Vec<u8>, R)> {
         let ty = self.ty;
         self.bin.into_vec().await.map(|(v, r)| (ty, v, r))
+    }
+
+    pub async fn read_exact(&mut self, buf: &mut [u8]) -> IoResult<()> {
+        self.bin.read_exact(buf).await
     }
 
     pub async fn read_all(self, buf: &mut [u8]) -> IoResult<R> {
