@@ -3,6 +3,7 @@ use std::task::{Context, Poll};
 
 use futures::io::Result as IoResult;
 use futures::prelude::*;
+use rmpv::Value;
 
 use super::*;
 use crate::encode::{ArrayFuture, MsgPackWriter};
@@ -104,6 +105,31 @@ impl<W: AsyncWrite + Unpin> RpcSink<W> {
         ok.last().write_nil().await
     }
 
+    /// Write an ok or error response message from a `Result<Value, Value>`
+    pub async fn write_value_response(
+        self,
+        msgid: MsgId,
+        value: Result<&Value, &Value>,
+    ) -> IoResult<RpcSink<W>>
+    where
+        W: Send,
+    {
+        let array = MsgPackWriter::new(self)
+            .write_array_len(4)
+            .await?
+            .next()
+            .write_int(MsgType::Response)
+            .await?
+            .next()
+            .write_int(msgid)
+            .await?
+            .next();
+        match value {
+            Ok(value) => array.write_nil().await?.last().write_value(value).await,
+            Err(value) => array.write_value(value).await?.last().write_nil().await,
+        }
+    }
+
     pub async fn write_notification(
         self,
         method: impl AsRef<str>,
@@ -125,19 +151,19 @@ impl<W: AsyncWrite + Unpin> RpcSink<W> {
 
 #[test]
 fn write_request_response() {
-    let sink = RpcSink::new(Vec::new());
-    let f = async {
-        sink.write_request(2.into(), "floop", 1)
+    let v1 = async move {
+        RpcSink::new(Vec::new())
+            .write_request(2.into(), "floop", 1)
             .await
             .unwrap()
             .last()
-            .write_int(42)
+            .write_int(42u8)
             .await
-            .unwrap()
-    };
-
-    let sink = futures::executor::LocalPool::new().run_until(f);
-    let v1 = sink.into_inner();
+    }
+    .now_or_never()
+    .unwrap()
+    .unwrap()
+    .into_inner();
 
     let mut v2 = Vec::new();
     rmp::encode::write_array_len(&mut v2, 4).unwrap();
@@ -151,11 +177,15 @@ fn write_request_response() {
 
 #[test]
 fn write_ok_response() {
-    let sink = RpcSink::new(Vec::new());
-    let f = sink.write_ok_response(2.into(), |rsp| rsp.write_int(42));
-
-    let sink = futures::executor::LocalPool::new().run_until(f).unwrap();
-    let v1 = sink.into_inner();
+    let v1 = async move {
+        RpcSink::new(Vec::new())
+            .write_ok_response(2.into(), |rsp| rsp.write_int(42))
+            .await
+    }
+    .now_or_never()
+    .unwrap()
+    .unwrap()
+    .into_inner();
 
     let mut v2 = Vec::new();
     rmp::encode::write_array_len(&mut v2, 4).unwrap();
@@ -168,11 +198,54 @@ fn write_ok_response() {
 
 #[test]
 fn write_err_response() {
-    let sink = RpcSink::new(Vec::new());
-    let f = sink.write_err_response(2.into(), |err| err.write_int(42));
+    let v1 = async move {
+        RpcSink::new(Vec::new())
+            .write_err_response(2.into(), |err| err.write_int(42))
+            .await
+    }
+    .now_or_never()
+    .unwrap()
+    .unwrap()
+    .into_inner();
 
-    let sink = futures::executor::LocalPool::new().run_until(f).unwrap();
-    let v1 = sink.into_inner();
+    let mut v2 = Vec::new();
+    rmp::encode::write_array_len(&mut v2, 4).unwrap();
+    rmp::encode::write_uint(&mut v2, 1).unwrap();
+    rmp::encode::write_uint(&mut v2, 2).unwrap();
+    rmp::encode::write_uint(&mut v2, 42).unwrap();
+    rmp::encode::write_nil(&mut v2).unwrap();
+    assert_eq!(v1, v2);
+}
+
+#[test]
+fn write_value_response() {
+    let v1 = async move {
+        RpcSink::new(Vec::new())
+            .write_value_response(2.into(), Ok(&Value::from(42u8)))
+            .await
+    }
+    .now_or_never()
+    .unwrap()
+    .unwrap()
+    .into_inner();
+
+    let mut v2 = Vec::new();
+    rmp::encode::write_array_len(&mut v2, 4).unwrap();
+    rmp::encode::write_uint(&mut v2, 1).unwrap();
+    rmp::encode::write_uint(&mut v2, 2).unwrap();
+    rmp::encode::write_nil(&mut v2).unwrap();
+    rmp::encode::write_uint(&mut v2, 42).unwrap();
+    assert_eq!(v1, v2);
+
+    let v1 = async move {
+        RpcSink::new(Vec::new())
+            .write_value_response(2.into(), Err(&Value::from(42u8)))
+            .await
+    }
+    .now_or_never()
+    .unwrap()
+    .unwrap()
+    .into_inner();
 
     let mut v2 = Vec::new();
     rmp::encode::write_array_len(&mut v2, 4).unwrap();
