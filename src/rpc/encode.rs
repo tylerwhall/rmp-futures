@@ -34,7 +34,6 @@ impl<W: AsyncWrite + Unpin> RpcSink<W> {
         self.writer
     }
 
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_request(
         self,
         msgid: MsgId,
@@ -105,7 +104,6 @@ impl<W: AsyncWrite + Unpin> RpcSink<W> {
         ok.last().write_nil().await
     }
 
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_notification(
         self,
         method: impl AsRef<str>,

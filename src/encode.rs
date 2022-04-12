@@ -332,12 +332,10 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
         self.write_u8(marker.to_u8()).await
     }
 
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_nil(mut self) -> IoResult<W> {
         self.write_marker(Marker::Null).await.map(|()| self.writer)
     }
 
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_bool(mut self, val: bool) -> IoResult<W> {
         if val {
             self.write_marker(Marker::True)
@@ -389,12 +387,10 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     }
 
     /// Write any int (u8-u64,i8-i64) in the most efficient representation
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_int(self, val: impl Into<EfficientInt>) -> IoResult<W> {
         self.write_efficient_int(val.into()).await
     }
 
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_f32(mut self, val: f32) -> IoResult<W> {
         self.write_marker(Marker::F32).await?;
         let mut buf = [0u8; 4];
@@ -402,7 +398,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
         self.write_4(buf).await.map(|()| self.writer)
     }
 
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_f64(mut self, val: f64) -> IoResult<W> {
         self.write_marker(Marker::F64).await?;
         let mut buf = [0u8; 8];
@@ -410,7 +405,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
         self.write_8(buf).await.map(|()| self.writer)
     }
 
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_array_len(mut self, len: u32) -> IoResult<ArrayFuture<W>> {
         const U16MAX: u32 = std::u16::MAX as u32;
 
@@ -431,7 +425,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
         })
     }
 
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_map_len(mut self, len: u32) -> IoResult<MapFuture<W>> {
         const U16MAX: u32 = std::u16::MAX as u32;
 
@@ -454,7 +447,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
 
     /// Encodes and attempts to write the most efficient binary array length
     /// representation TODO: return binwriter
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_bin_len(mut self, len: u32) -> IoResult<W> {
         if let Ok(len) = u8::try_from(len) {
             self.write_marker(Marker::Bin8).await?;
@@ -470,7 +462,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     }
 
     /// Encodes and attempts to write the most efficient binary representation
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_bin(self, data: &[u8]) -> IoResult<W> {
         let mut w = self.write_bin_len(data.len().try_into().unwrap()).await?;
         w.write_all(data).await?;
@@ -479,7 +470,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
 
     /// Encodes and attempts to write the most efficient binary array length
     /// representation TODO: return str writer
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_str_len(mut self, len: u32) -> IoResult<W> {
         if let Ok(len) = u8::try_from(len) {
             if len < 32 {
@@ -499,7 +489,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     }
 
     /// Encodes and attempts to write the most efficient binary representation
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_str_bytes(self, string: &[u8]) -> IoResult<W> {
         let mut w = self.write_str_len(string.len().try_into().unwrap()).await?;
         w.write_all(string).await?;
@@ -507,7 +496,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     }
 
     /// Encodes and attempts to write the most efficient binary representation
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_str(self, string: &str) -> IoResult<W> {
         self.write_str_bytes(string.as_bytes()).await
     }
@@ -519,7 +507,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     ///
     /// Panics if `ty` is negative, because it is reserved for future MessagePack
     /// extension including 2-byte type information.
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_ext_meta(mut self, len: u32, ty: i8) -> IoResult<W> {
         assert!(ty >= 0);
 
@@ -555,7 +542,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
         self.write_u8(ty as u8).await.map(|()| self.writer)
     }
 
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_ext(self, data: &[u8], ty: i8) -> IoResult<W> {
         let mut w = self
             .write_ext_meta(data.len().try_into().unwrap(), ty)
@@ -569,7 +555,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     /// # Panics
     ///
     /// Panics if array or map length exceeds 2^32-1
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_value(self, value: &Value) -> IoResult<W>
     where
         W: Send,
@@ -593,7 +578,6 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
     /// # Panics
     ///
     /// Panics if array or map length exceeds 2^32-1
-    #[must_use = "dropping the writer may leave the message unfinished"]
     pub async fn write_value_ref(self, value: &ValueRef<'_>) -> IoResult<W>
     where
         W: Send,
