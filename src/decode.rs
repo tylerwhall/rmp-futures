@@ -254,44 +254,44 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
         }
     }
 
-    async fn read_u8(&mut self) -> IoResult<u8> {
-        self.read_1().await
+    fn read_u8(&mut self) -> impl Future<Output = IoResult<u8>> + '_ {
+        self.read_1()
     }
 
-    async fn read_u16(&mut self) -> IoResult<u16> {
-        Ok(BigEndian::read_u16(&self.read_2().await?))
+    fn read_u16(&mut self) -> impl Future<Output = IoResult<u16>> + '_ {
+        self.read_2().map_ok(|val| BigEndian::read_u16(&val))
     }
 
-    async fn read_u32(&mut self) -> IoResult<u32> {
-        Ok(BigEndian::read_u32(&self.read_4().await?))
+    fn read_u32(&mut self) -> impl Future<Output = IoResult<u32>> + '_ {
+        self.read_4().map_ok(|val| BigEndian::read_u32(&val))
     }
 
-    async fn read_u64(&mut self) -> IoResult<u64> {
-        Ok(BigEndian::read_u64(&self.read_8().await?))
+    fn read_u64(&mut self) -> impl Future<Output = IoResult<u64>> + '_ {
+        self.read_8().map_ok(|val| BigEndian::read_u64(&val))
     }
 
-    async fn read_i8(&mut self) -> IoResult<i8> {
-        self.read_1().await.map(|x| x as i8)
+    fn read_i8(&mut self) -> impl Future<Output = IoResult<i8>> + '_ {
+        self.read_1().map_ok(|val| val as i8)
     }
 
-    async fn read_i16(&mut self) -> IoResult<i16> {
-        Ok(BigEndian::read_i16(&self.read_2().await?))
+    fn read_i16(&mut self) -> impl Future<Output = IoResult<i16>> + '_ {
+        self.read_2().map_ok(|val| BigEndian::read_i16(&val))
     }
 
-    async fn read_i32(&mut self) -> IoResult<i32> {
-        Ok(BigEndian::read_i32(&self.read_4().await?))
+    fn read_i32(&mut self) -> impl Future<Output = IoResult<i32>> + '_ {
+        self.read_4().map_ok(|val| BigEndian::read_i32(&val))
     }
 
-    async fn read_i64(&mut self) -> IoResult<i64> {
-        Ok(BigEndian::read_i64(&self.read_8().await?))
+    fn read_i64(&mut self) -> impl Future<Output = IoResult<i64>> + '_ {
+        self.read_8().map_ok(|val| BigEndian::read_i64(&val))
     }
 
-    async fn read_f32(&mut self) -> IoResult<f32> {
-        Ok(BigEndian::read_f32(&self.read_4().await?))
+    fn read_f32(&mut self) -> impl Future<Output = IoResult<f32>> + '_ {
+        self.read_4().map_ok(|val| BigEndian::read_f32(&val))
     }
 
-    async fn read_f64(&mut self) -> IoResult<f64> {
-        Ok(BigEndian::read_f64(&self.read_8().await?))
+    fn read_f64(&mut self) -> impl Future<Output = IoResult<f64>> + '_ {
+        self.read_8().map_ok(|val| BigEndian::read_f64(&val))
     }
 
     pub async fn skip(self) -> IoResult<R>

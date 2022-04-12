@@ -282,54 +282,54 @@ impl<W: AsyncWrite + Unpin> MsgPackWriter<W> {
         self.writer.write_all(&val).await
     }
 
-    async fn write_u8(&mut self, val: u8) -> IoResult<()> {
+    fn write_u8(&mut self, val: u8) -> impl Future<Output = IoResult<()>> + '_ {
         let buf = [val];
-        self.write_1(buf).await
+        self.write_1(buf)
     }
 
-    async fn write_u16(&mut self, val: u16) -> IoResult<()> {
+    fn write_u16(&mut self, val: u16) -> impl Future<Output = IoResult<()>> + '_ {
         let mut buf = [0u8; 2];
         BigEndian::write_u16(&mut buf, val);
-        self.write_2(buf).await
+        self.write_2(buf)
     }
 
-    async fn write_u32(&mut self, val: u32) -> IoResult<()> {
+    fn write_u32(&mut self, val: u32) -> impl Future<Output = IoResult<()>> + '_ {
         let mut buf = [0u8; 4];
         BigEndian::write_u32(&mut buf, val);
-        self.write_4(buf).await
+        self.write_4(buf)
     }
 
-    async fn write_u64(&mut self, val: u64) -> IoResult<()> {
+    fn write_u64(&mut self, val: u64) -> impl Future<Output = IoResult<()>> + '_ {
         let mut buf = [0u8; 8];
         BigEndian::write_u64(&mut buf, val);
-        self.write_8(buf).await
+        self.write_8(buf)
     }
 
-    async fn write_i8(&mut self, val: i8) -> IoResult<()> {
+    fn write_i8(&mut self, val: i8) -> impl Future<Output = IoResult<()>> + '_ {
         let buf = [val as u8];
-        self.write_1(buf).await
+        self.write_1(buf)
     }
 
-    async fn write_i16(&mut self, val: i16) -> IoResult<()> {
+    fn write_i16(&mut self, val: i16) -> impl Future<Output = IoResult<()>> + '_ {
         let mut buf = [0u8; 2];
         BigEndian::write_i16(&mut buf, val);
-        self.write_2(buf).await
+        self.write_2(buf)
     }
 
-    async fn write_i32(&mut self, val: i32) -> IoResult<()> {
+    fn write_i32(&mut self, val: i32) -> impl Future<Output = IoResult<()>> + '_ {
         let mut buf = [0u8; 4];
         BigEndian::write_i32(&mut buf, val);
-        self.write_4(buf).await
+        self.write_4(buf)
     }
 
-    async fn write_i64(&mut self, val: i64) -> IoResult<()> {
+    fn write_i64(&mut self, val: i64) -> impl Future<Output = IoResult<()>> + '_ {
         let mut buf = [0u8; 8];
         BigEndian::write_i64(&mut buf, val);
-        self.write_8(buf).await
+        self.write_8(buf)
     }
 
-    async fn write_marker(&mut self, marker: Marker) -> IoResult<()> {
-        self.write_u8(marker.to_u8()).await
+    fn write_marker(&mut self, marker: Marker) -> impl Future<Output = IoResult<()>> + '_ {
+        self.write_u8(marker.to_u8())
     }
 
     pub async fn write_nil(mut self) -> IoResult<W> {
