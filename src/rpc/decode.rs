@@ -212,6 +212,10 @@ impl<R: AsyncRead + Unpin> RpcStream<R> {
         }
     }
 
+    pub fn into_inner(self) -> R {
+        self.reader
+    }
+
     /// Helper used for request and response to read the msgid field
     async fn decode_msgid<R2: AsyncRead + Unpin>(
         array: ArrayFuture<R2>,
