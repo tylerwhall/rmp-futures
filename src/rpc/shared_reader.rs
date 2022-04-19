@@ -6,13 +6,12 @@ use std::task::{Context, Poll};
 use futures::channel::oneshot::{channel, Receiver, Sender};
 use futures::future::Either;
 use futures::io::Result as IoResult;
-use futures::pin_mut;
 use futures::prelude::*;
 
 use super::decode::{RpcMessage, RpcNotifyFuture, RpcRequestFuture, RpcResponseFuture, RpcStream};
 use super::encode::RpcSink;
 use super::{MsgId, ResponseResult};
-use crate::decode::{ValueFuture, WrapReader};
+use crate::decode::{MarkerFuture, ValueFuture, WrapReader};
 use crate::encode::ArrayFuture;
 
 use slab::Slab;
@@ -156,42 +155,48 @@ impl<R: AsyncRead + Unpin + Send + 'static> RequestDispatch<R> {
     pub async fn dispatch_interruptible(
         &self,
         mut stream: RpcStream<R>,
-    ) -> IoResult<Option<RpcIncomingMessage<RpcStream<R>>>> {
+    ) -> IoResult<RpcIteration<RpcStream<R>>> {
         let mut shutdown = if let Some(shutdown) = self.0.lock().unwrap().shutdown_waiter.take() {
             shutdown
         } else {
             // Exit immediately if we don't have the signal to wait on. That
             // means this is being called concurrently, which wouldn't make
             // sense anyway.
-            return Ok(None);
+            return Ok(RpcIteration::None(stream));
         };
 
         let ret = loop {
-            let next = stream.next();
-            pin_mut!(next);
-
-            let next = match future::select(next, shutdown.cancellation()).await {
-                Either::Left((next, _)) => next,
-                Either::Right((_, next)) => {
-                    // Cancel signaled. Exit if no pending method calls, else keep waiting on messages.
-                    {
-                        // New block to drop lock before await
-                        let mut inner = self.0.lock().unwrap();
-                        if inner.requests.is_empty() {
-                            // Re-arm by creating a new sender/receiver pair
-                            let (sender, receiver) = channel();
-                            inner.shutdown_trigger = Some(receiver);
-                            shutdown = sender;
-                            break None;
+            // Wait on the marker byte or cancellation
+            let (marker, s) =
+                match future::select(MarkerFuture::new(stream), shutdown.cancellation()).await {
+                    Either::Left((marker_and_reader, _)) => marker_and_reader,
+                    Either::Right((_, marker)) => {
+                        // Cancel signaled. Exit if no pending method calls, else keep waiting on messages.
+                        {
+                            // New block to drop lock before await
+                            let mut inner = self.0.lock().unwrap();
+                            if inner.requests.is_empty() {
+                                // Re-arm by creating a new sender/receiver pair
+                                let (sender, receiver) = channel();
+                                inner.shutdown_trigger = Some(receiver);
+                                shutdown = sender;
+                                break RpcIteration::None(marker.into_inner());
+                            }
                         }
+                        // Not ready to cancel. Continue waiting on marker.
+                        marker.await
                     }
-                    next.await
-                }
-            };
+                }?;
+            // Continue decoding after the marker byte
+            let next = s.next_after_marker(marker).await?;
 
-            stream = match next? {
-                RpcMessage::Request(req) => break Some(RpcIncomingMessage::Request(req)),
-                RpcMessage::Notify(nfy) => break Some(RpcIncomingMessage::Notify(nfy)),
+            stream = match next {
+                RpcMessage::Request(req) => {
+                    break RpcIteration::Some(RpcIncomingMessage::Request(req))
+                }
+                RpcMessage::Notify(nfy) => {
+                    break RpcIteration::Some(RpcIncomingMessage::Notify(nfy))
+                }
                 RpcMessage::Response(rsp) => self.dispatch_one(rsp).await?,
             }
         };
