@@ -8,6 +8,7 @@ use rmp::Marker;
 use rmpv::{Integer, Value};
 
 use byteorder::{BigEndian, ByteOrder};
+use futures::future::FusedFuture;
 use futures::io::ErrorKind;
 use futures::io::Result as IoResult;
 use futures::prelude::*;
@@ -182,6 +183,58 @@ impl<R> ValueFuture<R> {
     }
 }
 
+pub(crate) struct MarkerFuture<R> {
+    reader: Option<R>,
+}
+
+impl<R> MarkerFuture<R> {
+    pub fn new(reader: R) -> Self {
+        MarkerFuture {
+            reader: Some(reader),
+        }
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the future has already completed
+    pub fn into_inner(self) -> R {
+        self.reader.unwrap()
+    }
+}
+
+impl<R: AsyncRead + Unpin> Future for MarkerFuture<R> {
+    type Output = IoResult<(Marker, R)>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut buf = [0u8];
+
+        let s = self.get_mut();
+        if let Some(mut reader) = s.reader.take() {
+            let count = match AsyncRead::poll_read(Pin::new(&mut reader), cx, &mut buf) {
+                Poll::Ready(count) => count?,
+                Poll::Pending => {
+                    // Put reader back
+                    s.reader = Some(reader);
+                    return Poll::Pending;
+                }
+            };
+            Poll::Ready(match count {
+                0 => Err(ErrorKind::UnexpectedEof.into()),
+                1 => Ok((Marker::from_u8(buf[0]), reader)),
+                _ => unreachable!(),
+            })
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> FusedFuture for MarkerFuture<R> {
+    fn is_terminated(&self) -> bool {
+        self.reader.is_none()
+    }
+}
+
 #[must_use]
 pub struct MsgPackFuture<R> {
     reader: R,
@@ -309,7 +362,13 @@ impl<R: AsyncRead + Unpin> MsgPackFuture<R> {
     }
 
     pub async fn decode(mut self) -> IoResult<ValueFuture<R>> {
-        let marker = Marker::from_u8(self.read_u8().await?);
+        let mf = MarkerFuture::new(self.reader);
+        let (marker, reader) = mf.await?;
+        self.reader = reader;
+        self.decode_after_marker(marker).await
+    }
+
+    pub(crate) async fn decode_after_marker(mut self, marker: Marker) -> IoResult<ValueFuture<R>> {
         Ok(match marker {
             Marker::FixPos(val) => ValueFuture::Integer(Integer::from(val), self.reader),
             Marker::FixNeg(val) => ValueFuture::Integer(Integer::from(val), self.reader),

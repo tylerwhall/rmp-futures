@@ -7,9 +7,10 @@ use futures::io::ErrorKind;
 use futures::io::Result as IoResult;
 use futures::prelude::*;
 use num_traits::FromPrimitive;
+use rmp::Marker;
 
 use super::*;
-use crate::decode::{ArrayFuture, MsgPackFuture, StringFuture, ValueFuture};
+use crate::decode::{ArrayFuture, MarkerFuture, MsgPackFuture, StringFuture, ValueFuture};
 
 pub enum RpcMessage<R> {
     Request(RpcRequestFuture<R>),
@@ -234,14 +235,23 @@ impl<R: AsyncRead + Unpin> RpcStream<R> {
         Ok((MsgId(msgid), array))
     }
 
-    pub async fn next(self) -> IoResult<RpcMessage<RpcStream<R>>> {
+    pub async fn next(mut self) -> IoResult<RpcMessage<RpcStream<R>>> {
+        let (marker, reader) = MarkerFuture::new(self.reader).await?;
+        self.reader = reader;
+        self.next_after_marker(marker).await
+    }
+
+    pub(crate) async fn next_after_marker(
+        self,
+        marker: Marker,
+    ) -> IoResult<RpcMessage<RpcStream<R>>> {
         // First, wrap our RpcStream in a MsgPackFuture rather than using the
         // underlying reader. When this message is fully consumed and its reader
         // is returned, the client will be left with this RpcStream pointing at
         // the next message.
         let msg = MsgPackFuture::new(self);
         let a = msg
-            .decode()
+            .decode_after_marker(marker)
             .await?
             .into_array()
             .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "expected array"))?;
