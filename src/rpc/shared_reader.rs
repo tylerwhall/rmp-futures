@@ -109,18 +109,24 @@ impl<R: AsyncRead + Unpin + Send + 'static> RequestDispatch<R> {
                 // Decode the message to get an Ok/Err result
                 let result = rsp.result().await?;
                 let (result, receiver) = RpcResultFuture::from_result(result);
-                if let Err(_r) = sender.send(result) {
+                if let Err(result) = sender.send(result) {
                     println!("Got unsolicitied response {:?} (receiver dead)", id);
-                    // If the receiver was dropped, we get the
-                    // result back. Dropping it here will
-                    // complete our receiver just as if the
-                    // client code received it and dropped it.
+                    // If the receiver was dropped, we get the result back. We
+                    // need to consume the outer ValueFuture. Dropping the inner
+                    // RpcResultFuture here will complete our receiver just as
+                    // if the client code received it and dropped it.
+                    match result {
+                        Ok(value) => value,
+                        Err(value) => value,
+                    }
+                    .skip()
+                    .await?;
                 }
                 // oneshot::Canceled should not be possible
                 // because drop on RpcResultFuture always sends
                 // to the sender before the sender is dropped.
                 let result = receiver.await.expect("reader not returned");
-                // Consume the rest of the message if the client did not
+                // Consume the rest of the array if the client did not
                 result.finish().await
             }
             Some(None) => {
@@ -383,5 +389,86 @@ mod tests {
         let _server = method_handler_task.await;
         // Dispatch should exit now that all calls are finished
         dispatch_task.await.unwrap();
+    }
+
+    async fn poll_once<O>(fut: &mut (impl Future<Output = O> + Unpin)) -> Option<O> {
+        futures::future::poll_fn(|cx| {
+            let ret = fut.poll_unpin(cx);
+            match ret {
+                Poll::Pending => Poll::Ready(None),
+                Poll::Ready(ret) => Poll::Ready(Some(ret)),
+            }
+        })
+        .await
+    }
+
+    #[async_std::test]
+    async fn receiver_dropped() {
+        use std::sync::Arc;
+
+        use async_std::os::unix::net::UnixStream;
+        use async_std::task;
+        use futures::pin_mut;
+        use rmpv::Value;
+
+        let (client, server) = UnixStream::pair().unwrap();
+        let (client_rx, client_tx) = client.split();
+        let (server_rx, server_tx) = server.split();
+        let client_tx = RpcSink::new(client_tx);
+        let mut client_rx = RpcStream::new(client_rx);
+        let server_tx = RpcSink::new(server_tx);
+
+        let dispatch = Arc::new(RequestDispatch::default());
+
+        // Task that replies to any message with a complex Value that requires
+        // reads beyond decoding the initial type in the RPC response array
+        let server_task = async move {
+            let mut sink = RpcSink::new(server_tx);
+            let mut incoming = RpcStream::new(server_rx);
+            loop {
+                match incoming.next().await.unwrap() {
+                    RpcMessage::Request(req) => {
+                        sink = sink
+                            .write_value_response(req.id(), Ok(&Value::Array(vec![Value::Nil])))
+                            .await
+                            .unwrap();
+                        // Consume the request
+                        incoming = req.skip().await.unwrap();
+                    }
+                    RpcMessage::Notify(..) => unreachable!(),
+                    RpcMessage::Response(..) => unreachable!(),
+                }
+            }
+        };
+        pin_mut!(server_task);
+
+        let (ret, rsp1) = dispatch.write_request(client_tx, "asdf", 0).await;
+        let client_tx = ret.unwrap().end();
+        let (ret, rsp2) = dispatch.write_request(client_tx, "asdf", 0).await;
+        let _client_tx = ret.unwrap().end();
+
+        // Run the server to respond to the message
+        poll_once(&mut server_task).await;
+
+        // Drop rsp, simulating the client disconnecting before reading the response
+        drop(rsp1);
+
+        // Run the dispatcher to read the response and send the ValueFuture to rsp1
+        client_rx = match dispatch.turn(client_rx).await.unwrap() {
+            RpcIteration::None(client_rx) => client_rx,
+            RpcIteration::Some(_) => unreachable!(),
+        };
+        // Dispatch the 2nd response. This will crash if we didn't consume all the data from the first dropped one.
+        // Spawn a task because completion requires our reading and returning the stream below.
+        let dispatch_task = task::spawn(async move { dispatch.turn(client_rx).await.unwrap() });
+        // And make sure we truly handled the 2nd response.
+        match rsp2.await.unwrap() {
+            Ok(ret) => assert_eq!(
+                ret.into_value().await.unwrap().0,
+                Value::Array(vec![Value::Nil])
+            ),
+            Err(_) => panic!(),
+        };
+        dispatch_task.await;
     }
 }
